@@ -1,0 +1,9 @@
+# Julia-generated files
+Manifest.toml
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/docs/build/
+
+# macOS
+.DS_Store
