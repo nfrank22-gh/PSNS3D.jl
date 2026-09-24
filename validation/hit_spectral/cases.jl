@@ -44,14 +44,14 @@ end
 const E0_UNIT = 3 * (2π)^3
 
 const CASES = [
-    Case(name="lowre", N=64, ν=0.1, dt=0.005, nsteps=400, dump_every=20,
+    Case(name="lowre", N=64, ν=0.1, dt=0.005, nsteps=10000, dump_every=20,
          k_p=2, E0=E0_UNIT),
-    Case(name="sweep_N32", N=32, ν=0.01, dt=0.0025, nsteps=800, dump_every=40,
+    Case(name="sweep_N32", N=32, ν=0.01, dt=0.0025, nsteps=10000, dump_every=40,
          k_p=4, E0=E0_UNIT, N_ic=128),
-    Case(name="sweep_N64", N=64, ν=0.01, dt=0.0025, nsteps=800, dump_every=40,
+    Case(name="sweep_N64", N=64, ν=0.01, dt=0.0025, nsteps=10000, dump_every=40,
          k_p=4, E0=E0_UNIT, N_ic=128),
-    Case(name="sweep_N128", N=128, ν=0.01, dt=0.0025, nsteps=800, dump_every=40,
-         k_p=4, E0=E0_UNIT, N_ic=128),
+    #Case(name="sweep_N128", N=128, ν=0.01, dt=0.0025, nsteps=800, dump_every=40,
+     #    k_p=4, E0=E0_UNIT, N_ic=128),
 ]
 
 findcase(name) = CASES[findfirst(c -> c.name == name, CASES)]

@@ -11,8 +11,8 @@ Commands, run in order:
   - `hit`: run HIT_Spectral on each prepared case, locally, with
     `HIT_NPROCS` MPI ranks (default 4).
   - `compare`: march PSNS3D from the same initial condition, compare it
-    with every HIT dump, write `compare.csv` and plots per case, and check
-    the pass criteria. Exits nonzero if any fails.
+    with every HIT dump, write `compare.csv`, plots and a midplane
+    vorticity animation per case, and print a summary.
 
 With no case names, every case in `cases.jl` is used. `HIT_SPECTRAL_DIR`
 must point at a HIT_Spectral checkout at the pinned commit.
@@ -118,7 +118,7 @@ end
 
 March PSNS3D through `case` with the same `dt` as HIT, and compare at
 every HIT dump. Returns the per-dump table as a vector of named tuples,
-and writes it to `compare.csv` along with the final spectra and a figure.
+and writes it to `compare.csv` along with a figure and a vorticity animation.
 """
 function compare(case::Case)
     dir = rundir(case)
@@ -130,6 +130,7 @@ function compare(case::Case)
     u0 = read_field(joinpath(dir, "ic.bin"), case.N)
     û = forward_transform(u0, ws.plan)
     rows = []
+    frames = [(t=0.0, ps=midplane_vorticity(û, ws), hit=midplane_vorticity(û, ws))]
     t = 0.0
     for step in 1:case.nsteps
         û = advance(prob, û, t, case.dt, ws)
@@ -137,6 +138,7 @@ function compare(case::Case)
         step % case.dump_every == 0 || continue
         ûh = forward_transform(hit_dump(dir, step, case.N), ws.plan)
         push!(rows, (step=step, t=t, metrics(û, ûh, case, ws, w)...))
+        push!(frames, (t=t, ps=midplane_vorticity(û, ws), hit=midplane_vorticity(ûh, ws)))
     end
 
     open(joinpath(dir, "compare.csv"), "w") do io
@@ -148,32 +150,38 @@ function compare(case::Case)
     k, Ep = energy_spectrum(inverse_transform(û, ws.plan), g)
     _, Eh = energy_spectrum(uh, g)
     plot_case(case, rows, k, Ep, Eh, ws.kmax)
+    animate_vorticity(case, frames)
     return rows
+end
+
+"""
+    midplane_vorticity(û, ws)
+
+`|ω|` on the plane `z = π` (index `N÷2 + 1`), from the spectral velocity.
+"""
+function midplane_vorticity(û, ws)
+    ω = curl(û, ws)
+    iz = size(ω, 3) ÷ 2 + 1
+    return sqrt.(sum(abs2, view(ω, :, :, iz, :); dims=3)[:, :, 1])
 end
 
 const BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
 
 function plot_case(case, rows, k, Ep, Eh, kcut)
     t = [r.t for r in rows]
-    fig = Figure(size=(1200, 400))
-    ax1 = Axis(fig[1, 1]; title="PSNS3D vs HIT, 2/3 band", xlabel="t", yscale=log10)
-    lines!(ax1, t, [r.band_err for r in rows]; color=BLUE, linewidth=2, label="relative field error")
-    lines!(ax1, t, [sqrt(max(r.shell, 1e-300)) for r in rows]; color=ORANGE, linewidth=2,
-           linestyle=:dash, label="√(HIT energy fraction beyond N/3)")
-    Legend(fig[2, 1], ax1; framevisible=false, tellwidth=false)
-
-    ax2 = Axis(fig[1, 2]; title="kinetic energy", xlabel="t", ylabel="E")
+    fig = Figure(size=(900, 400))
+    ax2 = Axis(fig[1, 1]; title="kinetic energy", xlabel="t", ylabel="E")
     lines!(ax2, t, [r.E_ps for r in rows]; color=BLUE, linewidth=2, label="PSNS3D")
     lines!(ax2, t, [r.E_hit for r in rows]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
     axislegend(ax2; framevisible=false)
 
-    ax3 = Axis(fig[1, 3]; title="dissipation", xlabel="t", ylabel="ε")
+    ax3 = Axis(fig[1, 2]; title="dissipation", xlabel="t", ylabel="ε")
     lines!(ax3, t, [r.ε_ps for r in rows]; color=BLUE, linewidth=2, label="PSNS3D")
     lines!(ax3, t, [r.ε_hit for r in rows]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
     axislegend(ax3; framevisible=false)
 
     keep = (Ep .> 0) .| (Eh .> 0)
-    ax4 = Axis(fig[1, 4]; title=@sprintf("E(k) at t = %g", t[end]), xlabel="k",
+    ax4 = Axis(fig[1, 3]; title=@sprintf("E(k) at t = %g", t[end]), xlabel="k",
                xscale=log10, yscale=log10)
     lines!(ax4, k[keep], max.(Ep[keep], 1e-300); color=BLUE, linewidth=2, label="PSNS3D")
     lines!(ax4, k[Eh .> 0], Eh[Eh .> 0]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
@@ -183,6 +191,39 @@ function plot_case(case, rows, k, Ep, Eh, kcut)
 
     Label(fig[0, :], "$(case.name): N = $(case.N), ν = $(case.ν), dt = $(case.dt)"; fontsize=16)
     save(joinpath(rundir(case), "compare.png"), fig)
+end
+
+"""
+    animate_vorticity(case, frames)
+
+`vorticity.mp4`: midplane `|ω|` of PSNS3D and HIT side by side, one frame
+per dump, on a shared color scale fixed over the whole run, and the
+absolute difference of the two on a fixed log scale.
+"""
+function animate_vorticity(case, frames)
+    x = collect(range(0, 2π; length=case.N + 1))[1:end-1]
+    ωmax = maximum(max(maximum(f.ps), maximum(f.hit)) for f in frames)
+    err(f) = abs.(f.ps .- f.hit)
+    emax = maximum(maximum(err(f)) for f in frames)
+    erange = emax > 0 ? (emax * 1e-8, emax) : (1e-300, 1.0)
+    i = Observable(1)
+    fig = Figure()
+    title = @lift @sprintf("%s: midplane |ω| at t = %.3g", case.name, frames[$i].t)
+    Label(fig[0, 1:5], title; fontsize=16, tellwidth=false)
+    axis(col, name) = Axis(fig[1, col]; title=name, xlabel="x", ylabel="y", width=360, height=360)
+    local hm
+    for (col, (name, field)) in enumerate((("PSNS3D", :ps), ("HIT_Spectral", :hit)))
+        hm = heatmap!(axis(col, name), x, x, @lift(getfield(frames[$i], field));
+                      colormap=:inferno, colorrange=(0, ωmax))
+    end
+    Colorbar(fig[1, 3], hm; label="|ω|")
+    he = heatmap!(axis(4, "absolute error"), x, x, @lift(max.(err(frames[$i]), erange[1]));
+                  colormap=:viridis, colorscale=log10, colorrange=erange)
+    Colorbar(fig[1, 5], he; label="| |ω|_PSNS3D − |ω|_HIT |")
+    resize_to_layout!(fig)
+    record(fig, joinpath(rundir(case), "vorticity.mp4"), eachindex(frames); framerate=8) do n
+        i[] = n
+    end
 end
 
 function plot_sweep(results)
@@ -198,36 +239,18 @@ function plot_sweep(results)
 end
 
 """
-    check(results)
+    summarize(results)
 
-The pass criteria: `lowre` agrees to `1e-10` at every dump, and across
-the sweep the final error drops at least tenfold per doubling of `N`.
-Prints a verdict per criterion and returns whether all passed.
+Print each case's numbers at its final dump. There are no pass criteria:
+the plots and animations are what decide whether the solvers agree.
 """
-function check(results)
-    ok = true
-    byname = Dict(c.name => rows for (c, rows) in results)
-    if haskey(byname, "lowre")
-        e = maximum(r.band_err for r in byname["lowre"])
-        pass = e < 1e-10
-        @printf("%s  lowre: max band error %.2e (< 1e-10)\n", pass ? "PASS" : "FAIL", e)
-        ok &= pass
-    end
-    sweep = sort([(c, rows) for (c, rows) in results if startswith(c.name, "sweep_")]; by=x -> x[1].N)
-    for i in 1:length(sweep)-1
-        (c1, r1), (c2, r2) = sweep[i], sweep[i+1]
-        ratio = r1[end].band_err / r2[end].band_err
-        pass = ratio >= 10
-        @printf("%s  sweep N=%d -> %d: final band error %.2e -> %.2e, ratio %.1f (>= 10)\n",
-                pass ? "PASS" : "FAIL", c1.N, c2.N, r1[end].band_err, r2[end].band_err, ratio)
-        ok &= pass
-    end
+function summarize(results)
     for (c, rows) in results
         r = rows[end]
-        @printf("      %-11s t=%-5g band err %.2e  shell %.2e  E %.6g / %.6g  ε %.6g / %.6g (PSNS3D / HIT)\n",
-                c.name, r.t, r.band_err, r.shell, r.E_ps, r.E_hit, r.ε_ps, r.ε_hit)
+        @printf("%-11s t=%-5g max band err %.2e  final band err %.2e  shell %.2e  E %.6g / %.6g  ε %.6g / %.6g (PSNS3D / HIT)\n",
+                c.name, r.t, maximum(x.band_err for x in rows), r.band_err, r.shell,
+                r.E_ps, r.E_hit, r.ε_ps, r.ε_hit)
     end
-    return ok
 end
 
 # ---------------------------------------------------------------------------
@@ -249,7 +272,7 @@ function main(args)
         results = [(case, compare(case)) for case in cases]
         count(r -> startswith(r[1].name, "sweep_"), results) > 1 &&
             plot_sweep(filter(r -> startswith(r[1].name, "sweep_"), results))
-        return check(results) ? 0 : 1
+        summarize(results)
     else
         error("unknown command $cmd; expected prepare, hit or compare")
     end

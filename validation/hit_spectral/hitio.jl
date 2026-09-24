@@ -10,11 +10,11 @@ writes `data/RU_<step>.bin` every `full_data_freq` steps.
 
 """
 The HIT_Spectral commit this validation is pinned to: branch
-`fftw3-optimize-momentum-and-scalar-v1`, the pseudo-spectral solver with
-3/2-rule dealiasing. (The `main` branch is a different, finite-difference
-code on a staggered grid.)
+`wip/fftw3-optimize`, the pseudo-spectral solver with 3/2-rule dealiasing
+that is in production use. (The `main` branch is a different,
+finite-difference code on a staggered grid.)
 """
-const HIT_COMMIT = "5173ce509e044dacdf3d03f631191ea9fa7b61e3"
+const HIT_COMMIT = "d1e52a1f993a96a467396ca33a1af13c780e2395"
 
 """
     hit_dir()
@@ -104,10 +104,11 @@ A HIT_Spectral run directory for `case` starting from `u0`: `ic.bin`,
 `params.ini` and `func.cfg`. Everything but the momentum solver is
 switched off --- no LES, forcing, rotation, scalars or statistics --- and
 `rho0 = 1`, so `mu0` is the kinematic viscosity and `RU` is the velocity.
+`adaptive_dt` is set off explicitly, so HIT takes the fixed step `dt`.
 
-HIT's loop is `do { step } while (T_cur < T_final)` with `T_cur`
-accumulated in floating point, so `T_final` is set half a step short of
-`nsteps·dt` to make the step count exact.
+HIT's loop is `while (T_cur < T_final - 5e-6)` with `T_cur` accumulated
+in floating point, so `T_final` is set half a step short of `nsteps·dt`
+to make the step count exact regardless of rounding.
 """
 function write_run_dir(dir, case, u0; hitdir)
     mkpath(dir)
@@ -139,6 +140,7 @@ function write_run_dir(dir, case, u0; hitdir)
         [time]
         T_final = $(repr((case.nsteps - 0.5) * case.dt))
         dt      = $(repr(case.dt))
+        adaptive_dt = False
 
         [statistics]
         enable       = False
@@ -168,17 +170,17 @@ function write_run_dir(dir, case, u0; hitdir)
         forcing_scale_max = 1000
         forcing_gain = 0.45
         forcing_wait = 0
-        Auu11 = 0
-        Auu12 = 0
-        Auu13 = 0
-        Auu21 = 0
-        Auu22 = 0
-        Auu23 = 0
-        Auu31 = 0
-        Auu32 = 0
-        Auu33 = 0
-        Auu_record_start_time = 1e7
-        Auu_freeze_time = 1e8
+        A11 = 0
+        A12 = 0
+        A13 = 0
+        A21 = 0
+        A22 = 0
+        A23 = 0
+        A31 = 0
+        A32 = 0
+        A33 = 0
+        A_record_start_time = 1e7
+        A_freeze_time = 1e8
         omega1 = 0.0
         omega2 = 0.0
         omega3 = 0.0

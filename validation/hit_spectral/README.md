@@ -5,11 +5,11 @@ separately developed and validated MPI pseudo-spectral Navier--Stokes
 code, from the same initial condition and with the same time step, and
 compares the results.
 
-The reference is HIT_Spectral branch `fftw3-optimize-momentum-and-scalar-v1`
-at commit `5173ce509e044dacdf3d03f631191ea9fa7b61e3`. That branch is the
-pseudo-spectral solver; `main` is a different, finite-difference code. The
-script refuses to run against any other commit unless you pass
-`--allow-other-commit`.
+The reference is HIT_Spectral branch `wip/fftw3-optimize` at commit
+`d1e52a1f993a96a467396ca33a1af13c780e2395`. That branch is the
+pseudo-spectral solver in production use; `main` is an older,
+finite-difference code. The script refuses to run against any other
+commit unless you pass `--allow-other-commit`.
 
 ## What is and isn't expected to match
 
@@ -144,6 +144,7 @@ In `params.ini`, the case sets these keys:
 | `[fluid] mu0`                    | `ν`                          | HIT uses `nu = mu0/rho0` |
 | `[time] dt`                      | `dt`                         | |
 | `[time] T_final`                 | `(nsteps − 0.5)·dt`          | see below |
+| `[time] adaptive_dt`             | `False`                      | fixed step; it is the default, but set explicitly |
 | `[output] full_data_freq`        | `dump_every`                 | writes `data/RU_<step>.bin` |
 | `[initial] RU_type, RU_dir`      | `0`, `ic.bin`                | cold start from our IC |
 
@@ -154,7 +155,7 @@ Navier--Stokes equations:
 |----------------------------------------------|--------------|-----------|
 | `[LES] les_on`                               | `False`      | Smagorinsky model |
 | `[forcing] control_type`                     | `0`          | TKE / Reynolds-stress controller |
-| `[forcing] Auu11 … Auu33`                    | `0`          | linear forcing matrix (HIT still calls the forcing routine, but with a zero matrix it adds nothing) |
+| `[forcing] A11 … A33`                        | `0`          | linear forcing matrix |
 | `[forcing] use_filter`                       | `False`      | filtered forcing |
 | `[forcing] omega1..3`                        | `0`          | rotating frame |
 | `[forcing] homogeneity`                      | `0`          | mean flow: only the `k = 0` mode is zeroed |
@@ -164,10 +165,10 @@ Navier--Stokes equations:
 | no `[slice]` section                         |              | slice output |
 
 `T_final` is set half a step short because HIT's main loop is
-`do { step } while (T_cur < T_final)`, with `T_cur` accumulated by
-repeated `+= dt`. With `T_final = nsteps·dt`, rounding can leave `T_cur`
-just below `T_final` after the last step, and HIT then takes one step too
-many. Half a step short gives exactly `nsteps` steps.
+`while (T_cur < T_final - 5e-6)`, with `T_cur` accumulated by repeated
+`+= dt`. Aiming at `T_final = nsteps·dt` would leave the step count to
+rounding and HIT's tolerance; half a step short gives exactly `nsteps`
+steps.
 
 `hit` then runs, for each case,
 
@@ -201,8 +202,8 @@ so that `Σ w|û|² = ⟨|u|²⟩`.
 1. Check out the pinned commit, e.g. as a worktree of an existing clone:
 
    ```sh
-   git -C HIT_Spectral worktree add ../HIT_Spectral-validate 5173ce5
-   export HIT_SPECTRAL_DIR=$PWD/HIT_Spectral-validate
+   git -C HIT_Spectral worktree add ../HIT_Spectral-wip d1e52a1
+   export HIT_SPECTRAL_DIR=$PWD/HIT_Spectral-wip
    ```
 
 2. Build its bundled FFTW3 and fftMPI, then the solver with GCC. The
@@ -222,28 +223,98 @@ so that `Σ w|û|² = ⟨|u|²⟩`.
    make -j CXX=mpicxx COMPILER_TYPE=gcc
    ```
 
+   On Sherlock or Stampede3, build with the cluster's own scripts
+   (`lib/build_fftw3_sherlock.sh`, `lib/build_fftmpi_stampede3.sh`) and
+   the Makefile as-is, with the Intel compiler.
+
 3. Instantiate this environment (it uses the PSNS3D in this repository):
 
    ```sh
    julia --project=validation/hit_spectral -e 'using Pkg; Pkg.instantiate()'
    ```
 
-## Running
+## Running the validation cases
+
+After the one-time [Setup](#setup), a validation run is three commands,
+run from this directory. Every command takes case names to limit it (e.g.
+`prepare lowre`); with none, it runs all four cases in `cases.jl`.
+
+### 1. Point at the HIT_Spectral checkout
 
 ```sh
 cd validation/hit_spectral
-julia --project=. compare_hit.jl prepare            # ICs + HIT run directories in runs/
-OMP_NUM_THREADS=1 HIT_NPROCS=8 julia --project=. compare_hit.jl hit
-julia --project=. compare_hit.jl compare            # exits nonzero on failure
+export HIT_SPECTRAL_DIR=/path/to/HIT_Spectral-wip          # bash
+set -x HIT_SPECTRAL_DIR /path/to/HIT_Spectral-wip          # fish
 ```
 
-Each command takes case names to limit it, e.g. `compare lowre`. `hit`
-runs HIT locally. To run it elsewhere, copy `runs/` over, execute
-`runs/run_all.sh` there, and copy the `data/` directories back. The number
-of MPI ranks changes HIT's results only at roundoff level.
+Every command checks that this checkout is at the pinned commit and stops
+if it isn't (`--allow-other-commit` overrides that).
 
-`compare` writes `runs/<case>/compare.csv` and `compare.png` for each case,
-plus `runs/sweep.png`. The per-dump columns are:
+### 2. Prepare the cases
+
+```sh
+julia --project=. compare_hit.jl prepare lowre
+```
+
+This builds each case's initial condition and writes `runs/<case>/`
+(`ic.bin`, `params.ini`, `func.cfg`) and `runs/run_all.sh`. It prints
+each case's `dt` as a ratio to HIT's stability limit and refuses a case
+that is over it.
+
+### 3. Run HIT_Spectral
+
+Locally:
+
+```sh
+env OMP_NUM_THREADS=1 HIT_NPROCS=4 julia --project=. compare_hit.jl hit lowre
+```
+
+`HIT_NPROCS` is the number of MPI ranks (default 4); keep it at or below
+the number of physical cores. HIT writes `runs/<case>/data/RU_<step>.bin`
+and its log to `runs/<case>/sim.log`, and the commit and rank count go
+to `runs/<case>/hit_commit.txt`.
+
+On a cluster (Sherlock, Stampede3): copy `runs/` over, run
+`runs/run_all.sh` there with `HIT_SPECTRAL_DIR` set to a build of the
+pinned commit, and copy each `runs/<case>/data/` back. The number of
+ranks, and the compiler, change HIT's results only at roundoff level.
+
+### 4. Compare
+
+```sh
+julia --project=. compare_hit.jl compare lowre
+```
+
+This marches PSNS3D from the same `ic.bin` with the same `dt`, compares
+with every HIT dump, writes the outputs below and prints a one-line
+summary per case.
+
+### Run times
+
+On a desktop CPU with 4 ranks, `lowre` takes about 3.5 minutes in `hit`
+and 4 in `compare`. The sweep cases grow steeply with `N`: `sweep_N128`
+is by far the longest in both solvers.
+
+### When to re-run what
+
+- After editing a case in `cases.jl`: `prepare`, `hit` and `compare`.
+  `compare` takes its parameters from `cases.jl`, not from `params.ini`,
+  so PSNS3D would otherwise run the new case against HIT dumps of the old
+  one.
+- After changing PSNS3D or the plots: `compare` only.
+- After moving to another HIT_Spectral commit: update `HIT_COMMIT` in
+  `hitio.jl`, then `prepare`, `hit` and `compare`.
+
+### Outputs
+
+`compare` writes, for each case, `runs/<case>/compare.csv`, `compare.png`
+(energy, dissipation and the final spectrum for both solvers) and
+`vorticity.mp4`, an animation of `|ω|` on the midplane `z = π` for the two
+solvers side by side, with one frame per dump and a color scale that stays
+fixed for the whole run, next to their absolute difference on a fixed log
+scale. There are no automatic pass criteria; agreement is judged from
+the plots and animations. The resolution sweep's field error is plotted in
+`runs/sweep.png`. The per-dump columns of `compare.csv` are:
 
 - `band_err`: `‖û_PSNS3D − û_HIT‖ / ‖û_HIT‖` over the 2/3 band.
 - `shell`: the fraction of HIT's energy outside the 2/3 band.
