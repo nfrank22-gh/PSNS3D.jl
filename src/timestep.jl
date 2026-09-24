@@ -6,8 +6,8 @@ One step of `prob.integrator` of size `dt` from the spectral state `û`
 spectral state; `û` is not modified.
 
 The incoming state is dealiased once. Every stage then stays inside the
-2/3 band without further masking --- the convective and forcing terms are
-masked as they are formed and `-νk²û` is diagonal --- and the result is
+2/3 band without further masking --- the convective, SGS and forcing terms
+are masked as they are formed and `-νk²û` is diagonal --- and the result is
 masked again only to make that explicit to callers.
 """
 advance(prob::NSProblem, û, t, dt, ws::NSWorkspace) =

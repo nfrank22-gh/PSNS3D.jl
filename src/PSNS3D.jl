@@ -4,16 +4,18 @@
 A pseudo-spectral solver for the three-dimensional incompressible
 Navier--Stokes equations on a cubic periodic box,
 
-    ∂u_i/∂t = -u_j ∂u_i/∂x_j - ∂p/∂x_i + ν ∂²u_i/∂x_j∂x_j + f_i,
-    ∂u_i/∂x_i = 0.
+    ∂u_i/∂t = -u_j ∂u_i/∂x_j - ∂p/∂x_i + ν ∂²u_i/∂x_j∂x_j - ∂τ_ij/∂x_j + f_i,
+    ∂u_i/∂x_i = 0,
 
-In Fourier space the pressure is eliminated by the projection
+where `τ_ij` is the subgrid-scale stress of a large-eddy simulation (zero
+for a DNS). In Fourier space the pressure is eliminated by the projection
 `P_il(k) = δ_il - k_i k_l / k²` onto divergence-free fields, leaving
 
-    ∂û_i/∂t = P_il(k) [ (u × ω)^_l + f̂_l ] - ν k² û_i,
+    ∂û_i/∂t = P_il(k) [ (u × ω)^_l + Ĝ_l + f̂_l ] - ν k² û_i,
 
-with the convective term written in rotational form (the gradient part
-`∇(u·u/2)` is annihilated by `P`) and dealiased by the 2/3 rule.
+with `Ĝ = -(∂τ_ij/∂x_j)^`, the convective term written in rotational form
+(the gradient part `∇(u·u/2)` is annihilated by `P`), and the nonlinear
+terms dealiased by the 2/3 rule.
 
 ## Layout
 
@@ -21,6 +23,7 @@ with the convective term written in rotational form (the gradient part
   - `transform.jl`  --- `SpectralPlan` and the normalized real transform.
   - `workspace.jl`  --- [`NSWorkspace`](@ref): wavenumbers, mask, plans.
   - `forcing.jl`    --- the [`AbstractForcing`](@ref) extension point.
+  - `sgs.jl`        --- the [`AbstractSGSModel`](@ref) extension point, `Smagorinsky`.
   - `problem.jl`    --- [`NSProblem`](@ref) and the right-hand side.
   - `integrators.jl`--- the [`AbstractIntegrator`](@ref) extension point, `RK4`.
   - `timestep.jl`   --- [`advance`](@ref), one step of the integrator.
@@ -61,6 +64,7 @@ export PeriodicGrid, NSWorkspace, workspace, NSProblem, rhs_spectral
 
 # --- extension points ----------------------------------------------------
 export AbstractForcing, NoForcing, forcing_rhs, begin_step!
+export AbstractSGSModel, NoSGS, Smagorinsky, sgs_stress_divergence
 export AbstractIntegrator, RK4, imag_reach, real_reach
 
 # --- time stepping -------------------------------------------------------
@@ -81,6 +85,7 @@ include("grid.jl")
 include("transform.jl")
 include("workspace.jl")
 include("forcing.jl")
+include("sgs.jl")
 include("integrators.jl")
 include("problem.jl")
 include("timestep.jl")

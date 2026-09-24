@@ -30,7 +30,8 @@ The classical fourth-order Runge--Kutta method, with the viscous term
     k₄ = R(û + Δt k₃,     t + Δt)
     û' = û + (Δt/6)(k₁ + 2k₂ + 2k₃ + k₄)
 
-Four evaluations of `R`, each nine transforms. Because the viscous term is
+Four evaluations of `R`, each nine transforms, plus twelve with the
+[`Smagorinsky`](@ref) model. Because the viscous term is
 explicit, `Δt` carries a viscous limit (`viscous_number ≤ real_reach`) as
 well as the advective one.
 """
