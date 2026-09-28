@@ -13,6 +13,9 @@ are built around that:
   - `sweep_N32/64/128`: one turbulent flow at three resolutions. The
     out-of-band energy, and with it the disagreement, must fall
     spectrally with `N`. A real bug would not.
+  - `les`: the sweep's flow at `N = 64` with `ν = 0` and the Smagorinsky
+    model. The two codes implement the model differently (see the
+    README), so this is a physics comparison only.
 
 The `N = 128` member of the sweep doubles as the physics comparison at
 the target resolution (report only, no threshold).
@@ -26,6 +29,9 @@ the target resolution (report only, no threshold).
 is `turbulent_puff_ic(k_p, E0, seed)` built on an `N_ic`-point grid and
 spectrally truncated to the 2/3 band of `N` --- so the members of a sweep
 share their resolved modes exactly.
+
+`Cs` is the Smagorinsky constant of an LES with `Δ = dx`, or `nothing`
+for a DNS. HIT_Spectral's `ν_T = Smag_C dx² |S|` takes `Smag_C = Cs²`.
 """
 Base.@kwdef struct Case
     name::String
@@ -38,6 +44,7 @@ Base.@kwdef struct Case
     E0::Float64
     seed::Int = 1
     N_ic::Int = N
+    Cs::Union{Nothing,Float64} = nothing
 end
 
 # ∫u_i u_i dx = 3 u'² (2π)³, so u' = 1 initially.
@@ -52,11 +59,36 @@ const CASES = [
          k_p=4, E0=E0_UNIT, N_ic=128),
     #Case(name="sweep_N128", N=128, ν=0.01, dt=0.0025, nsteps=800, dump_every=40,
      #    k_p=4, E0=E0_UNIT, N_ic=128),
+    Case(name="les", N=64, ν=0.0, dt=0.0025, nsteps=800, dump_every=40,
+         k_p=4, E0=E0_UNIT, N_ic=128, Cs=0.17),
 ]
 
 findcase(name) = CASES[findfirst(c -> c.name == name, CASES)]
 
 grid(case::Case) = PeriodicGrid(2π, case.N; origin=0)
+
+sgs(case::Case) = isnothing(case.Cs) ? NoSGS() : Smagorinsky(grid(case); Cs=case.Cs)
+
+"""
+    strain_magnitude(û, ws)
+
+`|S| = √(2 S_ij S_ij)` in physical space, with the derivative
+wavenumbers `kd` over every mode of `û` but Nyquist --- not only the 2/3 band, so for
+a HIT field it includes the modes HIT keeps between `N/3` and `N/2`.
+"""
+function strain_magnitude(û, ws)
+    # G[i][:, :, :, j] = ∂_j u_i; the plans transform three components at a time.
+    function grad(ûi)
+        return PSNS3D.inverse_transform(cat(@.(im * ws.kd1 * ûi), @.(im * ws.kd2 * ûi),
+                                            @.(im * ws.kd3 * ûi); dims=4), ws.plan)
+    end
+    G = [grad(view(û, :, :, :, i)) for i in 1:3]
+    S2 = zero(view(G[1], :, :, :, 1))
+    for i in 1:3, j in 1:3
+        S2 .+= (view(G[i], :, :, :, j) .+ view(G[j], :, :, :, i)) .^ 2 ./ 4
+    end
+    return sqrt.(2 .* S2)
+end
 
 """
     initial_condition(case)
@@ -94,10 +126,20 @@ The margins of `case.dt` against HIT_Spectral's explicit RK4 limits at
 stay below the RK4 real-axis reach `2.785`, and the advective number
 `dt Σ_d max|u_d| (N/2)` below the imaginary reach `2√2`. Both are
 reported as ratios to the limit, so anything above `1` is unstable.
+
+For an LES, `ν` is replaced by `ν + max ν_t`, with `ν_t = (Cs dx)²|S|` of
+`u0` --- HIT's own diffusive CFL uses `ν + max ν_T` the same way.
 """
 function hit_step_limits(case::Case, u0)
     kN = case.N / 2
-    zvisc = case.dt * case.ν * 3kN^2 / real_reach(RK4())
+    νmax = case.ν
+    if !isnothing(case.Cs)
+        g = grid(case)
+        ws = NSWorkspace(g)
+        νmax += (case.Cs * g.dx)^2 *
+                maximum(strain_magnitude(PSNS3D.forward_transform(u0, ws.plan), ws))
+    end
+    zvisc = case.dt * νmax * 3kN^2 / real_reach(RK4())
     adv = case.dt * kN * sum(maximum(abs, view(u0, :, :, :, d)) for d in 1:3) /
           imag_reach(RK4())
     return (zvisc=zvisc, adv=adv)

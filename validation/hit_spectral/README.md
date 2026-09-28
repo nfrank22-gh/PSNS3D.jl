@@ -35,6 +35,37 @@ resolution. The cases are built around that:
   from the same resolved modes. The disagreement has to fall spectrally
   with `N`; a real bug would not. `sweep_N128` is also the physics
   comparison (energy, dissipation, spectrum).
+- `les`: the sweep's flow at 64³ with `ν = 0` and the Smagorinsky model.
+  A physics comparison only; see [LES](#les) for why it can't agree
+  closely.
+
+### LES
+
+Both codes use `ν_t = (Cs Δ)²|S|` with `Δ = dx`, but they march it
+differently:
+
+|                    | PSNS3D `Smagorinsky`            | HIT `les_on`                           |
+|--------------------|---------------------------------|----------------------------------------|
+| constant           | `Cs`                            | `Smag_C = Cs²`                         |
+| `ν_t` computed     | at every RK4 stage              | once per step, held for all 4 stages   |
+| form of the term   | `∂_j(2ν_t S_ij)`                | `ν_T∇²u + ∇ν_T·2S`                     |
+| dealiasing         | `T_ij` masked to the 2/3 band   | none: `N`-grid products, full band     |
+| derivatives        | Nyquist zeroed                  | Nyquist kept                           |
+
+The forms agree in the continuum (`∇·u = 0`), but the frozen `ν_T` makes
+the two schemes differ by O(dt²) on every step, starting with the first,
+and `|S|` is not a polynomial, so the aliasing differs too. The fields
+decorrelate over the run, and `les` is judged on E(t), dissipation and
+the spectrum, not on `band_err`.
+
+The dissipation panel checks each solver's energy budget on its own: with
+no forcing, `−dE/dt` should equal `ε + ε_sgs`. PSNS3D closes it. HIT
+falls about 10% short once its spectrum fills out to `N/2`, because its
+undealiased expanded form removes less energy than `⟨2ν_T S_ij S_ij⟩`
+(evaluating HIT's discrete term on its own dumps gives the same
+shortfall). It also piles energy up at the Nyquist mode. So HIT
+dissipates less and ends with a few percent more energy; that is a
+property of HIT's discretization, not a disagreement about the model.
 
 ## How the solvers are run
 
@@ -52,6 +83,7 @@ steps. Each case in `cases.jl` defines:
 | `dump_every` | HIT writes the velocity every this many steps; each dump is one comparison point |
 | `k_p`, `E0`, `seed` | arguments to `turbulent_puff_ic`                   |
 | `N_ic`       | grid size the initial condition is generated on (defaults to `N`) |
+| `Cs`         | Smagorinsky constant of an LES with `Δ = dx`; `nothing` (the default) for a DNS |
 
 The current cases:
 
@@ -61,6 +93,9 @@ The current cases:
 | `sweep_N32`  | 32  | 0.01 | 0.0025 | 800      | 40           | 4     | 128    |
 | `sweep_N64`  | 64  | 0.01 | 0.0025 | 800      | 40           | 4     | 128    |
 | `sweep_N128` | 128 | 0.01 | 0.0025 | 800      | 40           | 4     | 128    |
+| `les`        | 64  | 0    | 0.0025 | 800      | 40           | 4     | 128    |
+
+`les` also sets `Cs = 0.17`.
 
 All cases run to `t = 2`, with `E0 = 3(2π)³` so that the initial rms
 velocity is `u' = 1`, and `seed = 1`.
@@ -98,7 +133,8 @@ HIT's limits at `t = 0` (`hit_step_limits`), prints both as a ratio to the
 limit, and refuses a case where either ratio is ≥ 1:
 
 - viscous: `zvisc = dt·ν·3(N/2)² / 2.785`, where 2.785 is the reach of the
-  RK4 stability region along the real axis;
+  RK4 stability region along the real axis. For an LES, `ν` is replaced by
+  `ν + max ν_t`, computed from the initial condition;
 - advective: `adv = dt·(N/2)·Σ_d max|u_d| / 2√2`, where 2√2 is its reach
   along the imaginary axis.
 
@@ -108,7 +144,7 @@ limit, and refuses a case where either ratio is ≥ 1:
 
 ```julia
 g    = PeriodicGrid(2π, N; origin=0)
-prob = NSProblem(g; ν=ν)          # no forcing, RK4 integrator
+prob = NSProblem(g; ν=ν, sgs=sgs)  # sgs = Smagorinsky(g; Cs) for an LES, else NoSGS()
 ws   = workspace(prob)
 û    = forward_transform(read_field("ic.bin", N), ws.plan)
 for step in 1:nsteps
@@ -153,7 +189,7 @@ Navier--Stokes equations:
 
 | key                                          | value        | turns off |
 |----------------------------------------------|--------------|-----------|
-| `[LES] les_on`                               | `False`      | Smagorinsky model |
+| `[LES] les_on`                               | `False`      | Smagorinsky model (`True`, with `Smag_C = Cs²`, for an LES case) |
 | `[forcing] control_type`                     | `0`          | TKE / Reynolds-stress controller |
 | `[forcing] A11 … A33`                        | `0`          | linear forcing matrix |
 | `[forcing] use_filter`                       | `False`      | filtered forcing |
@@ -237,7 +273,7 @@ so that `Σ w|û|² = ⟨|u|²⟩`.
 
 After the one-time [Setup](#setup), a validation run is three commands,
 run from this directory. Every command takes case names to limit it (e.g.
-`prepare lowre`); with none, it runs all four cases in `cases.jl`.
+`prepare lowre`); with none, it runs every case in `cases.jl`.
 
 ### 1. Point at the HIT_Spectral checkout
 
@@ -308,7 +344,7 @@ is by far the longest in both solvers.
 ### Outputs
 
 `compare` writes, for each case, `runs/<case>/compare.csv`, `compare.png`
-(energy, dissipation and the final spectrum for both solvers) and
+(energy, dissipation with the energy budget, and the final spectrum for both solvers) and
 `vorticity.mp4`, an animation of `|ω|` on the midplane `z = π` for the two
 solvers side by side, with one frame per dump and a color scale that stays
 fixed for the whole run, next to their absolute difference on a fixed log
@@ -320,3 +356,9 @@ the plots and animations. The resolution sweep's field error is plotted in
 - `shell`: the fraction of HIT's energy outside the 2/3 band.
 - `E_*`: kinetic energy `½⟨u_iu_i⟩` for each solver.
 - `ε_*`: dissipation `ν⟨∂_ju_i∂_ju_i⟩` for each solver.
+- `εsgs_*`: SGS dissipation `⟨2ν_t S_ij S_ij⟩ = (CsΔ)²⟨|S|³⟩` for each
+  solver, zero for a DNS. `|S|` is taken over all of the field's modes
+  except Nyquist, so HIT's includes the ones it keeps above the 2/3 band.
+
+The dissipation panel of `compare.png` plots `ε + ε_sgs` (lines) against
+`−dE/dt` differenced between dumps (markers), for each solver.

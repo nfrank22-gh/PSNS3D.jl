@@ -102,7 +102,8 @@ end
 
 A HIT_Spectral run directory for `case` starting from `u0`: `ic.bin`,
 `params.ini` and `func.cfg`. Everything but the momentum solver is
-switched off --- no LES, forcing, rotation, scalars or statistics --- and
+switched off --- no forcing, rotation, scalars or statistics, and no LES
+unless `case.Cs` is set, in which case `Smag_C = Cs²` --- and
 `rho0 = 1`, so `mu0` is the kinematic viscosity and `RU` is the velocity.
 `adaptive_dt` is set off explicitly, so HIT takes the fixed step `dt`.
 
@@ -134,8 +135,8 @@ function write_run_dir(dir, case, u0; hitdir)
         gravity = 0.0,0.0,0.0
 
         [LES]
-        les_on = False
-        Smag_C = 0.0
+        les_on = $(isnothing(case.Cs) ? "False" : "True")
+        Smag_C = $(isnothing(case.Cs) ? "0.0" : repr(case.Cs^2))
 
         [time]
         T_final = $(repr((case.nsteps - 0.5) * case.dt))

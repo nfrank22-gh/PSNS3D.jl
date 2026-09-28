@@ -39,8 +39,9 @@ function prepare(cases; hitdir)
     for case in cases
         u0 = initial_condition(case)
         lim = hit_step_limits(case, u0)
-        @printf("%-11s N=%-4d ν=%-6g dt=%-7g steps=%-5d  HIT margins: zvisc %.2f  adv %.2f\n",
-                case.name, case.N, case.ν, case.dt, case.nsteps, lim.zvisc, lim.adv)
+        @printf("%-11s N=%-4d ν=%-6g Cs=%-5s dt=%-7g steps=%-5d  HIT margins: zvisc %.2f  adv %.2f\n",
+                case.name, case.N, case.ν, something(case.Cs, "-"), case.dt, case.nsteps,
+                lim.zvisc, lim.adv)
         max(lim.zvisc, lim.adv) < 1 || error("$(case.name): dt is outside HIT's RK4 stability limit")
         write_run_dir(rundir(case), case, u0; hitdir=hitdir)
     end
@@ -98,7 +99,11 @@ At one dump, with `ûp` PSNS3D's state and `ûh` HIT's:
   - `shell`: the fraction of HIT's energy outside the 2/3 band, the
     predicted source of any disagreement;
   - `E`, `ε`: kinetic energy `½⟨u_iu_i⟩` and dissipation `ν⟨∂_ju_i ∂_ju_i⟩`
-    of each solver.
+    of each solver;
+  - `εsgs`: SGS dissipation `⟨2ν_t S_ij S_ij⟩ = (Cs Δ)²⟨|S|³⟩` of each
+    solver, zero for a DNS. `|S|` is taken over every mode of the field
+    (see [`strain_magnitude`](@ref)), so HIT's includes its modes above
+    the 2/3 band.
 """
 function metrics(ûp, ûh, case, ws, w)
     band = ws.mask
@@ -109,8 +114,11 @@ function metrics(ûp, ûh, case, ws, w)
     band_err = sqrt(s(band .* abs2.(ûp .- ûh)) / Eh_band)
     shell = Eh_out / Eh_all
     ε(û) = case.ν * s(ws.ksq .* abs2.(û))
+    εsgs(û) = isnothing(case.Cs) ? 0.0 :
+        (case.Cs * ws.grid.dx)^2 * sum(strain_magnitude(û, ws) .^ 3) / case.N^3
     return (band_err=band_err, shell=shell,
-            E_ps=s(abs2.(ûp)) / 2, E_hit=Eh_all / 2, ε_ps=ε(ûp), ε_hit=ε(ûh))
+            E_ps=s(abs2.(ûp)) / 2, E_hit=Eh_all / 2, ε_ps=ε(ûp), ε_hit=ε(ûh),
+            εsgs_ps=εsgs(ûp), εsgs_hit=εsgs(ûh))
 end
 
 """
@@ -123,12 +131,13 @@ and writes it to `compare.csv` along with a figure and a vorticity animation.
 function compare(case::Case)
     dir = rundir(case)
     g = grid(case)
-    prob = NSProblem(g; ν=case.ν)
+    prob = NSProblem(g; ν=case.ν, sgs=sgs(case))
     ws = workspace(prob)
     w = parseval_weights(case.N)
 
     u0 = read_field(joinpath(dir, "ic.bin"), case.N)
-    û = forward_transform(u0, ws.plan)
+    û0 = forward_transform(u0, ws.plan)
+    û = û0
     rows = []
     frames = [(t=0.0, ps=midplane_vorticity(û, ws), hit=midplane_vorticity(û, ws))]
     t = 0.0
@@ -149,7 +158,7 @@ function compare(case::Case)
     uh = hit_dump(dir, case.nsteps, case.N)
     k, Ep = energy_spectrum(inverse_transform(û, ws.plan), g)
     _, Eh = energy_spectrum(uh, g)
-    plot_case(case, rows, k, Ep, Eh, ws.kmax)
+    plot_case(case, rows, metrics(û0, û0, case, ws, w), k, Ep, Eh, ws.kmax)
     animate_vorticity(case, frames)
     return rows
 end
@@ -167,7 +176,16 @@ end
 
 const BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
 
-function plot_case(case, rows, k, Ep, Eh, kcut)
+"""
+    plot_case(case, rows, r0, k, Ep, Eh, kcut)
+
+`compare.png`: energy, dissipation and the final spectrum of both
+solvers. The dissipation panel shows the total `ε + εsgs` against the
+budget `-dE/dt`, differenced between dumps (with `r0`, the metrics of the
+initial condition, as the first point) --- with no forcing each solver
+must close its own budget, whatever the other one does.
+"""
+function plot_case(case, rows, r0, k, Ep, Eh, kcut)
     t = [r.t for r in rows]
     fig = Figure(size=(900, 400))
     ax2 = Axis(fig[1, 1]; title="kinetic energy", xlabel="t", ylabel="E")
@@ -175,10 +193,16 @@ function plot_case(case, rows, k, Ep, Eh, kcut)
     lines!(ax2, t, [r.E_hit for r in rows]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
     axislegend(ax2; framevisible=false)
 
-    ax3 = Axis(fig[1, 2]; title="dissipation", xlabel="t", ylabel="ε")
-    lines!(ax3, t, [r.ε_ps for r in rows]; color=BLUE, linewidth=2, label="PSNS3D")
-    lines!(ax3, t, [r.ε_hit for r in rows]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
-    axislegend(ax3; framevisible=false)
+    ax3 = Axis(fig[1, 2]; title="dissipation (lines) vs −dE/dt (markers)", xlabel="t",
+               ylabel=isnothing(case.Cs) ? "ε" : "ε + ε_sgs")
+    lines!(ax3, t, [r.ε_ps + r.εsgs_ps for r in rows]; color=BLUE, linewidth=2, label="PSNS3D")
+    lines!(ax3, t, [r.ε_hit + r.εsgs_hit for r in rows]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
+    tt = [0.0; t]
+    tm = (tt[1:end-1] .+ tt[2:end]) ./ 2
+    budget(E) = -diff(E) ./ diff(tt)
+    scatter!(ax3, tm, budget([r0.E_ps; [r.E_ps for r in rows]]); color=BLUE, marker=:circle, markersize=7)
+    scatter!(ax3, tm, budget([r0.E_hit; [r.E_hit for r in rows]]); color=ORANGE, marker=:xcross, markersize=9)
+    axislegend(ax3; position=:cb, framevisible=false)
 
     keep = (Ep .> 0) .| (Eh .> 0)
     ax4 = Axis(fig[1, 3]; title=@sprintf("E(k) at t = %g", t[end]), xlabel="k",
@@ -189,7 +213,8 @@ function plot_case(case, rows, k, Ep, Eh, kcut)
     ylims!(ax4, max(1e-20, minimum(Eh[Eh .> 0])), nothing)
     axislegend(ax4; position=:lb, framevisible=false)
 
-    Label(fig[0, :], "$(case.name): N = $(case.N), ν = $(case.ν), dt = $(case.dt)"; fontsize=16)
+    les = isnothing(case.Cs) ? "" : ", Smagorinsky Cs = $(case.Cs)"
+    Label(fig[0, :], "$(case.name): N = $(case.N), ν = $(case.ν)$les, dt = $(case.dt)"; fontsize=16)
     save(joinpath(rundir(case), "compare.png"), fig)
 end
 
@@ -247,9 +272,9 @@ the plots and animations are what decide whether the solvers agree.
 function summarize(results)
     for (c, rows) in results
         r = rows[end]
-        @printf("%-11s t=%-5g max band err %.2e  final band err %.2e  shell %.2e  E %.6g / %.6g  ε %.6g / %.6g (PSNS3D / HIT)\n",
+        @printf("%-11s t=%-5g max band err %.2e  final band err %.2e  shell %.2e  E %.6g / %.6g  ε+εsgs %.6g / %.6g (PSNS3D / HIT)\n",
                 c.name, r.t, maximum(x.band_err for x in rows), r.band_err, r.shell,
-                r.E_ps, r.E_hit, r.ε_ps, r.ε_hit)
+                r.E_ps, r.E_hit, r.ε_ps + r.εsgs_ps, r.ε_hit + r.εsgs_hit)
     end
 end
 
