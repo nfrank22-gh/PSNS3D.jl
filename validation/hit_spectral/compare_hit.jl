@@ -140,14 +140,20 @@ function compare(case::Case)
     û = û0
     rows = []
     frames = [(t=0.0, ps=midplane_vorticity(û, ws), hit=midplane_vorticity(û, ws))]
+    spec_steps = spectrum_steps(case)
+    k, E0 = energy_spectrum(u0, g)
+    spectra = [(t=0.0, ps=E0, hit=E0)]
     t = 0.0
     for step in 1:case.nsteps
         û = advance(prob, û, t, case.dt, ws)
         t = step * case.dt
         step % case.dump_every == 0 || continue
-        ûh = forward_transform(hit_dump(dir, step, case.N), ws.plan)
+        uh = hit_dump(dir, step, case.N)
+        ûh = forward_transform(uh, ws.plan)
         push!(rows, (step=step, t=t, metrics(û, ûh, case, ws, w)...))
         push!(frames, (t=t, ps=midplane_vorticity(û, ws), hit=midplane_vorticity(ûh, ws)))
+        step in spec_steps && push!(spectra, (t=t, ps=energy_spectrum(inverse_transform(û, ws.plan), g)[2],
+                                              hit=energy_spectrum(uh, g)[2]))
     end
 
     open(joinpath(dir, "compare.csv"), "w") do io
@@ -155,12 +161,21 @@ function compare(case::Case)
         foreach(r -> println(io, join(values(r), ",")), rows)
     end
 
-    uh = hit_dump(dir, case.nsteps, case.N)
-    k, Ep = energy_spectrum(inverse_transform(û, ws.plan), g)
-    _, Eh = energy_spectrum(uh, g)
-    plot_case(case, rows, metrics(û0, û0, case, ws, w), k, Ep, Eh, ws.kmax)
+    plot_case(case, rows, k, spectra[end].ps, spectra[end].hit, ws.kmax)
+    plot_spectra(case, k, spectra, ws.kmax)
     animate_vorticity(case, frames)
     return rows
+end
+
+"""
+    spectrum_steps(case)
+
+The three dump steps, besides `t = 0`, at which `spectra.png` shows the
+spectrum: the dumps nearest a third, two thirds and all of the run.
+"""
+function spectrum_steps(case::Case)
+    ndump = case.nsteps ÷ case.dump_every
+    return [max(1, round(Int, f * ndump)) * case.dump_every for f in (1 / 3, 2 / 3, 1)]
 end
 
 """
@@ -176,46 +191,74 @@ end
 
 const BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"
 
+case_title(case) = "$(case.name): N = $(case.N), ν = $(case.ν)" *
+                   (isnothing(case.Cs) ? "" : ", Smagorinsky Cs = $(case.Cs)") * ", dt = $(case.dt)"
+
 """
-    plot_case(case, rows, r0, k, Ep, Eh, kcut)
+    spectrum_panel!(ax, k, Ep, Eh, kcut)
+
+Both solvers' `E(k)` on log axes, with the 2/3 cutoff `kcut` marked.
+"""
+function spectrum_panel!(ax, k, Ep, Eh, kcut)
+    keep = (Ep .> 0) .| (Eh .> 0)
+    lines!(ax, k[keep], max.(Ep[keep], 1e-300); color=BLUE, linewidth=2, label="PSNS3D")
+    lines!(ax, k[Eh .> 0], Eh[Eh .> 0]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
+    vlines!(ax, [kcut]; color=:gray60, linewidth=1)
+    ylims!(ax, max(1e-20, minimum(Eh[Eh .> 0])), nothing)
+end
+
+"""
+    plot_case(case, rows, k, Ep, Eh, kcut)
 
 `compare.png`: energy, dissipation and the final spectrum of both
-solvers. The dissipation panel shows the total `ε + εsgs` against the
-budget `-dE/dt`, differenced between dumps (with `r0`, the metrics of the
-initial condition, as the first point) --- with no forcing each solver
-must close its own budget, whatever the other one does.
+solvers. The dissipation is the one computed from each solver's resolved
+field, `ε = ν⟨∂_ju_i∂_ju_i⟩` plus, for an LES, `ε_sgs = (CsΔ)²⟨|S|³⟩`.
 """
-function plot_case(case, rows, r0, k, Ep, Eh, kcut)
+function plot_case(case, rows, k, Ep, Eh, kcut)
     t = [r.t for r in rows]
-    fig = Figure(size=(900, 400))
-    ax2 = Axis(fig[1, 1]; title="kinetic energy", xlabel="t", ylabel="E")
+    fig = Figure(size=(1000, 420))
+    ax2 = Axis(fig[1, 1]; title=L"E = \frac{1}{2}\langle u_i u_i \rangle", xlabel="t", ylabel="E")
     lines!(ax2, t, [r.E_ps for r in rows]; color=BLUE, linewidth=2, label="PSNS3D")
     lines!(ax2, t, [r.E_hit for r in rows]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
     axislegend(ax2; framevisible=false)
 
-    ax3 = Axis(fig[1, 2]; title="dissipation (lines) vs −dE/dt (markers)", xlabel="t",
-               ylabel=isnothing(case.Cs) ? "ε" : "ε + ε_sgs")
+    εtitle = isnothing(case.Cs) ?
+        L"\varepsilon = \nu \langle \partial_j u_i \, \partial_j u_i \rangle" :
+        L"\varepsilon = \nu \langle \partial_j u_i \, \partial_j u_i \rangle + (C_s \Delta)^2 \langle |S|^3 \rangle"
+    ax3 = Axis(fig[1, 2]; title=εtitle, xlabel="t", ylabel="ε")
     lines!(ax3, t, [r.ε_ps + r.εsgs_ps for r in rows]; color=BLUE, linewidth=2, label="PSNS3D")
     lines!(ax3, t, [r.ε_hit + r.εsgs_hit for r in rows]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
-    tt = [0.0; t]
-    tm = (tt[1:end-1] .+ tt[2:end]) ./ 2
-    budget(E) = -diff(E) ./ diff(tt)
-    scatter!(ax3, tm, budget([r0.E_ps; [r.E_ps for r in rows]]); color=BLUE, marker=:circle, markersize=7)
-    scatter!(ax3, tm, budget([r0.E_hit; [r.E_hit for r in rows]]); color=ORANGE, marker=:xcross, markersize=9)
-    axislegend(ax3; position=:cb, framevisible=false)
+    axislegend(ax3; framevisible=false)
 
-    keep = (Ep .> 0) .| (Eh .> 0)
     ax4 = Axis(fig[1, 3]; title=@sprintf("E(k) at t = %g", t[end]), xlabel="k",
                xscale=log10, yscale=log10)
-    lines!(ax4, k[keep], max.(Ep[keep], 1e-300); color=BLUE, linewidth=2, label="PSNS3D")
-    lines!(ax4, k[Eh .> 0], Eh[Eh .> 0]; color=ORANGE, linewidth=2, linestyle=:dash, label="HIT_Spectral")
-    vlines!(ax4, [kcut]; color=:gray60, linewidth=1)
-    ylims!(ax4, max(1e-20, minimum(Eh[Eh .> 0])), nothing)
+    spectrum_panel!(ax4, k, Ep, Eh, kcut)
     axislegend(ax4; position=:lb, framevisible=false)
 
-    les = isnothing(case.Cs) ? "" : ", Smagorinsky Cs = $(case.Cs)"
-    Label(fig[0, :], "$(case.name): N = $(case.N), ν = $(case.ν)$les, dt = $(case.dt)"; fontsize=16)
+    Label(fig[0, :], case_title(case); fontsize=16)
     save(joinpath(rundir(case), "compare.png"), fig)
+end
+
+"""
+    plot_spectra(case, k, spectra, kcut)
+
+`spectra.png`: both solvers' `E(k)` at the four times in `spectra`, one
+panel each, on shared axes.
+"""
+function plot_spectra(case, k, spectra, kcut)
+    fig = Figure(size=(900, 750))
+    axes = [Axis(fig[i, j]; title=@sprintf("t = %g", s.t), xlabel="k", ylabel="E(k)",
+                 xscale=log10, yscale=log10)
+            for (s, (i, j)) in zip(spectra, ((1, 1), (1, 2), (2, 1), (2, 2)))]
+    for (ax, s) in zip(axes, spectra)
+        spectrum_panel!(ax, k, s.ps, s.hit, kcut)
+    end
+    linkaxes!(axes...)
+    # The floor comes from the evolved spectra: the band-limited initial one falls off far lower.
+    ylims!(axes[1], max(1e-20, minimum(minimum(s.hit[s.hit .> 0]) for s in spectra[2:end])), nothing)
+    axislegend(axes[1]; position=:lb, framevisible=false)
+    Label(fig[0, :], case_title(case); fontsize=16)
+    save(joinpath(rundir(case), "spectra.png"), fig)
 end
 
 """

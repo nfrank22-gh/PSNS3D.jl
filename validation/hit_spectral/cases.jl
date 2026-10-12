@@ -59,7 +59,7 @@ const CASES = [
          k_p=4, E0=E0_UNIT, N_ic=128),
     #Case(name="sweep_N128", N=128, ν=0.01, dt=0.0025, nsteps=800, dump_every=40,
      #    k_p=4, E0=E0_UNIT, N_ic=128),
-    Case(name="les", N=64, ν=0.0, dt=0.0025, nsteps=800, dump_every=40,
+    Case(name="les", N=64, ν=0.0, dt=0.0025, nsteps=10000, dump_every=40,
          k_p=4, E0=E0_UNIT, N_ic=128, Cs=0.17),
 ]
 

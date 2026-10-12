@@ -58,8 +58,8 @@ and `|S|` is not a polynomial, so the aliasing differs too. The fields
 decorrelate over the run, and `les` is judged on E(t), dissipation and
 the spectrum, not on `band_err`.
 
-The dissipation panel checks each solver's energy budget on its own: with
-no forcing, `−dE/dt` should equal `ε + ε_sgs`. PSNS3D closes it. HIT
+Each solver's energy budget can be checked on its own from `compare.csv`:
+with no forcing, `−dE/dt` should equal `ε + ε_sgs`. PSNS3D closes it. HIT
 falls about 10% short once its spectrum fills out to `N/2`, because its
 undealiased expanded form removes less energy than `⟨2ν_T S_ij S_ij⟩`
 (evaluating HIT's discrete term on its own dumps gives the same
@@ -344,8 +344,9 @@ is by far the longest in both solvers.
 ### Outputs
 
 `compare` writes, for each case, `runs/<case>/compare.csv`, `compare.png`
-(energy, dissipation with the energy budget, and the final spectrum for both solvers) and
-`vorticity.mp4`, an animation of `|ω|` on the midplane `z = π` for the two
+(energy, dissipation and the final spectrum for both solvers), `spectra.png`
+(both solvers' spectra at `t = 0` and at the dumps nearest a third, two
+thirds and all of the run, one panel each) and `vorticity.mp4`, an animation of `|ω|` on the midplane `z = π` for the two
 solvers side by side, with one frame per dump and a color scale that stays
 fixed for the whole run, next to their absolute difference on a fixed log
 scale. There are no automatic pass criteria; agreement is judged from
@@ -360,5 +361,7 @@ the plots and animations. The resolution sweep's field error is plotted in
   solver, zero for a DNS. `|S|` is taken over all of the field's modes
   except Nyquist, so HIT's includes the ones it keeps above the 2/3 band.
 
-The dissipation panel of `compare.png` plots `ε + ε_sgs` (lines) against
-`−dE/dt` differenced between dumps (markers), for each solver.
+The dissipation panel of `compare.png` plots the dissipation computed from
+each solver's resolved field, `ε + ε_sgs`: for a DNS just
+`ε = ν⟨∂_ju_i∂_ju_i⟩`, and for an LES with `ν = 0` just `ε_sgs`. Each
+panel's title gives its equation.
