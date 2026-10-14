@@ -25,7 +25,7 @@ terms dealiased by the 2/3 rule.
   - `forcing.jl`    --- the [`AbstractForcing`](@ref) extension point.
   - `sgs.jl`        --- the [`AbstractSGSModel`](@ref) extension point, `Smagorinsky`.
   - `problem.jl`    --- [`NSProblem`](@ref) and the right-hand side.
-  - `integrators.jl`--- the [`AbstractIntegrator`](@ref) extension point, `RK4`.
+  - `integrators.jl`--- the [`AbstractIntegrator`](@ref) extension point, `RK4`, `RK2`.
   - `timestep.jl`   --- [`advance`](@ref), one step of the integrator.
   - `simulate.jl`   --- [`simulate`](@ref), a plain time loop.
   - `stability.jl`  --- CFL and viscous margins, `cfl_dt`.
@@ -65,13 +65,13 @@ export PeriodicGrid, NSWorkspace, workspace, NSProblem, rhs_spectral
 # --- extension points ----------------------------------------------------
 export AbstractForcing, NoForcing, forcing_rhs, begin_step!
 export AbstractSGSModel, NoSGS, Smagorinsky, sgs_stress_divergence
-export AbstractIntegrator, RK4, imag_reach, real_reach
+export AbstractIntegrator, RK4, RK2, imag_reach, real_reach
 
 # --- time stepping -------------------------------------------------------
 export advance, advance_physical, simulate
 
 # --- stability -----------------------------------------------------------
-export cfl_number, viscous_number, spectral_tail, cfl_dt
+export courant_number, cfl_number, viscous_number, spectral_tail, cfl_dt
 
 # --- utilities -----------------------------------------------------------
 export curl, project, leray_project!, divergence_residual, spectral_divergence_residual

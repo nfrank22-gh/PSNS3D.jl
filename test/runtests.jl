@@ -77,6 +77,49 @@ end
     end
 end
 
+@testset "RK2 physics step" begin
+    N, H = 24, 4.0
+    g = PeriodicGrid(H, N)
+    prob = NSProblem(g; ν=1e-2, integrator=RK2())
+    ws = workspace(prob)
+    u0 = turbulent_puff_ic(g; sigma=H / 8, k_p=2π * 3 / H, seed=0, E0=1.0)
+
+    @testset "stability reaches of the RK2 polynomial" begin
+        R(z) = 1 + z + z^2 / 2
+        @test imag_reach(RK2()) == 0
+        @test all(y -> abs(R(im * y)) > 1, (1e-2, 0.5, 1.0, 2.0))
+        @test R(-real_reach(RK2())) ≈ 1 atol = 1e-12
+        @test abs(R(-0.99real_reach(RK2()))) < 1 < abs(R(-1.01real_reach(RK2())))
+    end
+
+    @testset "the linear part is the RK2 polynomial of -νk²Δt" begin
+        ε = 1e-6
+        dt = 0.5
+        _, ûP = advance_physical(prob, ε .* u0, 0.0, dt, ws)
+        û0 = forward_transform(ε .* u0, ws.plan) .* ws.mask
+        z = -prob.ν .* ws.ksq .* dt
+        expected = û0 .* @. (1 + z + z^2 / 2)
+        @test norm(ûP .- expected) / norm(expected) < 1e-5
+    end
+
+    @testset "second-order in Δt" begin
+        march(u, h, n) = (for _ in 1:n; u, _ = advance_physical(prob, u, 0.0, h, ws); end; u)
+        T = 0.04
+        ref = march(u0, T / 1024, 1024)
+        errs = [norm(march(u0, T / n, n) .- ref) for n in (4, 8, 16, 32)]
+        orders = [log2(errs[i] / errs[i+1]) for i in 1:length(errs)-1]
+        @test all(o -> 1.8 < o < 2.2, orders)
+    end
+
+    @testset "advance leaves its input alone and stays in the 2/3 band" begin
+        û = forward_transform(u0, ws.plan)
+        û_copy = copy(û)
+        ûP = advance(prob, û, 0.0, 1e-3, ws)
+        @test û == û_copy
+        @test all(iszero, ûP .* (1 .- ws.mask))
+    end
+end
+
 @testset "stability metrics" begin
     g = PeriodicGrid(4.0, 16)
     prob = NSProblem(g; ν=1e-2)
@@ -87,6 +130,16 @@ end
         dt = cfl_dt(prob, u, 0.5, ws)
         @test cfl_number(prob, u, dt, ws) ≈ 0.5 rtol = 1e-12
         @test cfl_dt(prob, zero(u), 0.5, ws) == Inf
+    end
+
+    @testset "courant_number is Δt max|u| k_max, cfl_number its ratio to the reach" begin
+        C = courant_number(prob, u, 0.1, ws)
+        @test C ≈ 0.1 * maximum(abs, u) * ws.kmax
+        @test cfl_number(prob, u, 0.1, ws) ≈ C / imag_reach(RK4())
+        prob2 = NSProblem(g; ν=1e-2, integrator=RK2())
+        @test courant_number(prob2, u, 0.1, ws) == C
+        @test cfl_number(prob2, u, 0.1, ws) == Inf
+        @test_throws ArgumentError simulate(prob2, u, (0.0, 0.1); dt=0.01, cfl=0.5)
     end
 
     @testset "viscous_number is Δt ν k_max²" begin

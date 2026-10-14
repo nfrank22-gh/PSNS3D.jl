@@ -32,6 +32,21 @@ function advance(::RK4, prob::NSProblem, û, t, dt, ws::NSWorkspace)
     return ûP
 end
 
+function advance(::RK2, prob::NSProblem, û, t, dt, ws::NSWorkspace)
+    h = real(eltype(û))(dt)
+    û0 = û .* ws.mask
+    begin_step!(prob.forcing, û0, t, dt, ws)
+
+    k = rhs_spectral(prob, û0, t, ws)
+    acc = copy(k)
+    k = rhs_spectral(prob, û0 .+ h .* k, t + dt, ws)
+    acc .+= k
+
+    ûP = û0 .+ (h / 2) .* acc
+    ûP .*= ws.mask
+    return ûP
+end
+
 """
     advance_physical(prob, u, t, dt, ws)
 

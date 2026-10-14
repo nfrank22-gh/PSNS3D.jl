@@ -47,3 +47,32 @@ one.
 """
 imag_reach(::RK4) = 2sqrt(2)
 real_reach(::RK4) = 2.785293563405282
+
+"""
+    RK2()
+
+Heun's method (the explicit trapezoidal rule, also SSP-RK2), with the
+viscous term `-νk²û` marched explicitly alongside the convection. With
+`R = rhs_spectral`,
+
+    k₁ = R(û, t)
+    k₂ = R(û + Δt k₁, t + Δt)
+    û' = û + (Δt/2)(k₁ + k₂)
+
+Two evaluations of `R`, half the cost of [`RK4`](@ref) per step. It is a
+convex combination of two forward-Euler steps, so it is strong-stability
+preserving.
+"""
+struct RK2 <: AbstractIntegrator end
+
+"""
+    imag_reach(::RK2), real_reach(::RK2)
+
+The RK2 stability polynomial `1 + z + z²/2` has `|R(iy)|² = 1 + y⁴/4`,
+which exceeds `1` for every `y ≠ 0`: no step is strictly stable for pure
+advection, so the imaginary reach is `0` and only dissipation (viscous,
+SGS, forcing) holds the slow `y⁴/8`-per-step growth in check. Along the
+negative real axis it reaches `2`.
+"""
+imag_reach(::RK2) = 0.0
+real_reach(::RK2) = 2.0

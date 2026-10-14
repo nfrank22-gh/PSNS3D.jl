@@ -5,13 +5,16 @@ March `u0` from `t0` to `t1` and return `(u, t, nsteps)`.
 
 With `cfl = nothing` every step is `dt`. With a numeric `cfl` each step
 is `min(dt, cfl_dt(prob, u, cfl, ws))`, so `dt` acts as the cap. The last
-step is shortened to land on `t1` exactly.
+step is shortened to land on `t1` exactly. A numeric `cfl` needs an
+integrator with a positive `imag_reach`, so it is refused for [`RK2`](@ref).
 
 `callback(u, t, n)`, if given, is called after every step with the new
 field, its time and the step count.
 """
 function simulate(prob::NSProblem, u0::AbstractArray, tspan; dt::Real,
                   cfl=nothing, ws::NSWorkspace=workspace(prob), callback=nothing)
+    cfl === nothing || imag_reach(prob.integrator) > 0 ||
+        throw(ArgumentError("cfl stepping needs imag_reach > 0; $(nameof(typeof(prob.integrator))) has none"))
     t, t1 = float.(tspan)
     u = u0
     n = 0

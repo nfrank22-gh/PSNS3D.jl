@@ -1,17 +1,31 @@
 """
+    courant_number(prob, u, dt, ws)
+
+The Courant number of a step `dt` on the field `u`,
+
+    Δt · max|u| · k_max,
+
+the largest advective exponent `|z|`, independent of the integrator.
+`k_max` is the top mode surviving 2/3 dealiasing. Stability requires
+`courant_number ≤ imag_reach(integrator)`.
+"""
+function courant_number(prob::NSProblem, u::AbstractArray, dt::Real, ws::NSWorkspace)
+    umax = Float64(maximum(abs, u))
+    return dt * umax * ws.kmax
+end
+
+"""
     cfl_number(prob, u, dt, ws)
 
 The advective margin of a step `dt` on the field `u`,
 
-    Δt · max|u| · k_max / imag_reach(integrator),
+    courant_number / imag_reach(integrator),
 
-a ratio to the integrator's limit, so `> 1` means unstable. `k_max` is
-the top mode surviving 2/3 dealiasing.
+a ratio to the integrator's limit, so `> 1` means unstable. `Inf` for an
+integrator with no imaginary reach ([`RK2`](@ref)) on a nonzero field.
 """
-function cfl_number(prob::NSProblem, u::AbstractArray, dt::Real, ws::NSWorkspace)
-    umax = Float64(maximum(abs, u))
-    return dt * umax * ws.kmax / imag_reach(prob.integrator)
-end
+cfl_number(prob::NSProblem, u::AbstractArray, dt::Real, ws::NSWorkspace) =
+    courant_number(prob, u, dt, ws) / imag_reach(prob.integrator)
 
 """
     viscous_number(prob, dt, ws)
@@ -29,7 +43,8 @@ The `Δt` at which [`cfl_number`](@ref) equals the target `cfl`,
 
     Δt = cfl · imag_reach / (max|u| · k_max).
 
-`Inf` for a zero field.
+`Inf` for a zero field, and `0` for an integrator with no imaginary
+reach ([`RK2`](@ref)), which has no stable advective step.
 """
 function cfl_dt(prob::NSProblem, u::AbstractArray, cfl::Real, ws::NSWorkspace)
     umax = Float64(maximum(abs, u))
