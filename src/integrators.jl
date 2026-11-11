@@ -32,8 +32,8 @@ The classical fourth-order Runge--Kutta method, with the viscous term
 
 Four evaluations of `R`, each nine transforms, plus twelve with the
 [`Smagorinsky`](@ref) model. Because the viscous term is
-explicit, `Δt` carries a viscous limit (`viscous_number ≤ real_reach`) as
-well as the advective one.
+explicit, `Δt` carries a viscous limit (`3 viscous_number ≤ real_reach`,
+see [`viscous_number`](@ref)) as well as the advective one.
 """
 struct RK4 <: AbstractIntegrator end
 

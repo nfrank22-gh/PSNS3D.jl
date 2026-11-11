@@ -13,13 +13,14 @@ memory and no bandwidth. `kd` is the derivative wavenumber, identical to
 has no representable derivative, and leaving it in would inject a
 spurious imaginary part.
 
-`mask` is the 2/3 dealiasing rule: modes with `|j_d| > N/3` in any
-direction are zeroed. Besides removing the aliases of the pseudo-spectral
+`mask` is the 2/3 dealiasing rule: modes with `|j_d| > ⌊N/3⌋` in any
+direction are zeroed, which leaves a cube of modes. Besides removing the aliases of the pseudo-spectral
 product, it leaves a band of empty modes between `N/3` and the Nyquist
 `N/2`, which a caller that stretches the spectrum (a dilation `k → ak`
 with `a < 3/2`) can use as a buffer against wrap-around.
 
-`kmax = 2π(N/3)/H` is the top wavenumber surviving the mask.
+`kmax = 2π⌊N/3⌋/H` is the top wavenumber per direction surviving the
+mask; the corners of the cube reach `|k| = √3 kmax`.
 """
 struct NSWorkspace{G,P,A1,A2,A3,AM,AS}
     grid::G
