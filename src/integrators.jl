@@ -4,9 +4,10 @@
 A time integrator for the spectral momentum equation. A subtype
 implements
 
-    advance(integ, prob, û, t, dt, ws) -> û′
+    advance!(ûP, integ, prob, û, t, dt, ws, sc)
 
-one step of size `dt` from `û` at time `t`, and the two stability reaches
+one step of size `dt` from `û` at time `t` into `ûP`, working in the
+[`StepCache`](@ref) `sc`, and the two stability reaches
 
     imag_reach(integ)    # extent of the stability region along the imaginary axis
     real_reach(integ)    # ... and along the negative real axis (`Inf` if unbounded)

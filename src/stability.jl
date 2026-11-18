@@ -69,21 +69,22 @@ function cfl_dt(prob::NSProblem, u::AbstractArray, cfl::Real, ws::NSWorkspace)
 end
 
 """
-    spectral_tail(u, ws)
+    spectral_tail(u, ws; uhat=nothing)
 
 The fraction of the dealiased energy `½Σ|û|²` carried by
 `|k| > (2/3) k_max`. It stays small while the field is resolved and
 climbs when energy piles up against the dealiasing cutoff. A CFL spike
 with a clean tail is a time-step problem; one that follows a rising tail
 is a resolution problem that a smaller `Δt` only delays.
+`uhat`, if given, is `u`'s normalized transform and saves computing it.
 
 On the half-spectrum axis every `j₁ > 0` bin stands for itself and its
 conjugate, hence the weight `2` there (the Nyquist bin is outside the
 mask, so needs no exception). Costs one forward transform.
 """
-function spectral_tail(u::AbstractArray, ws::NSWorkspace)
+function spectral_tail(u::AbstractArray, ws::NSWorkspace; uhat=nothing)
     T = real(eltype(u))
-    û = forward_transform(u, ws.plan)
+    û = uhat === nothing ? forward_transform(u, ws.plan) : uhat
     e = sum(abs2, û; dims=4) .* ws.mask .* ifelse.(ws.k1 .== 0, one(T), T(2))
     total = Float64(sum(e))
     total == 0 && return 0.0

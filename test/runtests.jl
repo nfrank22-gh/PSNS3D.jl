@@ -301,6 +301,76 @@ end
     @test sum(E) * dk ≈ 0.5 * sum(abs2, u) / N^3 rtol = 0.1
 end
 
+@testset "in-place kernels" begin
+    N, H = 16, 2π
+    g = PeriodicGrid(H, N)
+    u = turbulent_puff_ic(g; sigma=H / 6, k_p=2π * 3 / H, seed=4, E0=1.0)
+    ws = NSWorkspace(g)
+    û = forward_transform(u, ws.plan)
+
+    @testset "transforms preserve their input" begin
+        v̂ = similar(û)
+        @test PSNS3D.forward_transform!(v̂, u, ws.plan) == û
+        ŵ = copy(û)
+        v = similar(u)
+        @test PSNS3D.inverse_transform!(v, ŵ, ws.plan) == inverse_transform(û, ws.plan)
+        @test ŵ == û                                # FFTW's C2R would overwrite it
+        @test v ≈ u
+        @test PSNS3D.inverse_transform_scratch!(similar(u), copy(û), ws.plan) == v
+    end
+
+    @testset "advance! is advance, bit for bit, also in place" begin
+        for integ in (RK2(), RK4()), sgs in (NoSGS(), Smagorinsky(g; Cs=0.17))
+            prob = NSProblem(g; ν=1e-2, sgs=sgs, integrator=integ)
+            sc = StepCache(prob, ws)
+            ref = advance(prob, û, 0.0, 1e-2, ws)
+            @test advance!(similar(û), prob, û, 0.0, 1e-2, ws, sc) == ref
+            v̂ = copy(û)
+            @test advance!(v̂, prob, v̂, 0.0, 1e-2, ws, sc) == ref
+            v = copy(u)
+            ŵ = similar(û)
+            advance_physical!(v, ŵ, prob, 0.0, 1e-2, ws, sc)
+            ur, ûr = advance_physical(prob, u, 0.0, 1e-2, ws)
+            @test v == ur && ŵ == ûr
+            @test rhs_spectral!(similar(û), prob, û, 0.0, ws, RHSCache(ws)) ==
+                  rhs_spectral(prob, û, 0.0, ws)
+        end
+    end
+
+    @testset "a physical-space forcing is the spectral one, shared transform" begin
+        # f = -a u, once as a spectral forcing and once added to u × ω.
+        struct DampS <: AbstractForcing
+            a::Float64
+        end
+        struct DampP <: AbstractForcing
+            a::Float64
+        end
+        PSNS3D.forcing_rhs(f::DampS, û, t, ws) = -f.a .* û
+        PSNS3D.forcing_space(::DampP) = :physical
+        PSNS3D.physical_forcing!(C, f::DampP, u, t, ws) = (C .-= f.a .* u; C)
+        sgs = Smagorinsky(g; Cs=0.17)
+        Rs = rhs_spectral(NSProblem(g; ν=0.0, sgs=sgs, forcing=DampS(3.0)), û .* ws.mask, 0.0, ws)
+        Rp = rhs_spectral(NSProblem(g; ν=0.0, sgs=sgs, forcing=DampP(3.0)), û .* ws.mask, 0.0, ws)
+        @test Rp ≈ Rs rtol = 1e-12
+        @test forcing_space(NoForcing()) === :spectral
+    end
+
+    @testset "leray_project! hands back the projected transform" begin
+        v̂ = similar(û)
+        p = leray_project!(copy(u), ws; uhat=v̂)
+        @test v̂ ≈ forward_transform(p, ws.plan) atol = 1e-14
+    end
+
+    @testset "spectra from a given transform" begin
+        k, E = energy_spectrum(u, g)
+        k2, E2 = energy_spectrum(u, g; uhat=û)
+        @test k2 == k
+        @test E2 ≈ E rtol = 1e-12
+        @test spectral_tail(u, ws; uhat=û) == spectral_tail(u, ws)
+        @test spectral_divergence_residual(û, g) ≈ divergence_residual(u, g) rtol = 1e-10
+    end
+end
+
 @testset "backend × precision" begin
     # A device and an element type are only ever properties of the grid,
     # which is what this checks: every available (device, T) pair builds
@@ -344,6 +414,18 @@ end
 
             p = leray_project!(copy(sol.u), ws)
             @test typeof(p) === typeof(u0)
+
+            # The in-place step on this device: bit-identical to the
+            # allocating one, and the scratch transform (which on the GPU
+            # skips CUFFT.jl's input copy) agrees with the preserving one.
+            sp = NSProblem(g; ν=T(1e-2), sgs=Smagorinsky(g; Cs=0.17), integrator=RK2())
+            û0 = forward_transform(u0, ws.plan)
+            @test Array(advance!(similar(û0), sp, û0, 0.0, 1e-3, ws, StepCache(ws))) ==
+                  Array(advance(sp, û0, 0.0, 1e-3, ws))
+            @test Array(PSNS3D.inverse_transform_scratch!(similar(u0), copy(û0), ws.plan)) ==
+                  Array(PSNS3D.inverse_transform!(similar(u0), û0, ws.plan))
+            k, E = energy_spectrum(u0, g)
+            @test all(isfinite, E) && length(E) == N ÷ 2
         end
     end
 end

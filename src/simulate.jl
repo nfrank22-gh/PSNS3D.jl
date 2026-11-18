@@ -9,20 +9,24 @@ step is shortened to land on `t1` exactly. A numeric `cfl` needs an
 integrator with a positive `imag_reach`, so it is refused for [`RK2`](@ref).
 
 `callback(u, t, n)`, if given, is called after every step with the new
-field, its time and the step count.
+field, its time and the step count. The march runs in place in one
+[`StepCache`](@ref), so `u` is overwritten by the next step; a callback
+that keeps it must `copy` it.
 """
 function simulate(prob::NSProblem, u0::AbstractArray, tspan; dt::Real,
                   cfl=nothing, ws::NSWorkspace=workspace(prob), callback=nothing)
     cfl === nothing || imag_reach(prob.integrator) > 0 ||
         throw(ArgumentError("cfl stepping needs imag_reach > 0; $(nameof(typeof(prob.integrator))) has none"))
     t, t1 = float.(tspan)
-    u = u0
+    u = copy(u0)
+    û = similar(u, Complex{eltype(u)}, size(ws.mask)..., 3)
+    sc = StepCache(ws)
     n = 0
     while t < t1
         h = cfl === nothing ? float(dt) : min(float(dt), cfl_dt(prob, u, cfl, ws))
         last = t1 - t <= h
         last && (h = t1 - t)
-        u, _ = advance_physical(prob, u, t, h, ws)
+        advance_physical!(u, û, prob, t, h, ws, sc)
         t = last ? t1 : t + h
         n += 1
         callback === nothing || callback(u, t, n)

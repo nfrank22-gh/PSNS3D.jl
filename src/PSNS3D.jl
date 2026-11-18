@@ -22,6 +22,7 @@ terms dealiased by the 2/3 rule.
   - `grid.jl`       --- [`PeriodicGrid`](@ref), the cubic box.
   - `transform.jl`  --- `SpectralPlan` and the normalized real transform.
   - `workspace.jl`  --- [`NSWorkspace`](@ref): wavenumbers, mask, plans.
+  - `cache.jl`      --- [`RHSCache`](@ref), [`StepCache`](@ref): scratch arrays.
   - `forcing.jl`    --- the [`AbstractForcing`](@ref) extension point.
   - `sgs.jl`        --- the [`AbstractSGSModel`](@ref) extension point, `Smagorinsky`.
   - `problem.jl`    --- [`NSProblem`](@ref) and the right-hand side.
@@ -45,7 +46,21 @@ API:
 
 `SpectralPlan`, `forward_transform`, `inverse_transform`, `wavenumbers`
 and `allocate_state` are public but not exported, since their names are
-generic; call them as `PSNS3D.forward_transform` and so on.
+generic; call them as `PSNS3D.forward_transform` and so on. The same goes
+for the in-place kernels `forward_transform!`, `inverse_transform!`,
+`inverse_transform_scratch!`, `curl!`, `project!`, `nonlinear!` and
+`strain_rate!`.
+
+## In place
+
+Every operator of a step has an in-place form that writes into
+caller-owned arrays and works in a preallocated [`RHSCache`](@ref) or
+[`StepCache`](@ref): [`advance!`](@ref), [`advance_physical!`](@ref),
+[`rhs_spectral!`](@ref), [`add_sgs!`](@ref). A step then allocates
+nothing on the device. The allocating forms (`advance`, `rhs_spectral`,
+`curl`, ...) are thin wrappers that build a cache per call, so the two
+give bit-identical results; use them for tests and one-off evaluations,
+and the in-place forms in a time loop.
 
 Fields live on whatever array type the chosen backend supplies, so the
 same code runs on CPU and on an NVIDIA GPU; see `backend.jl` and
@@ -54,21 +69,23 @@ same code runs on CPU and on an NVIDIA GPU; see `backend.jl` and
 module PSNS3D
 
 using FFTW
+using LinearAlgebra: mul!
 using Random
 
 # --- backend -------------------------------------------------------------
 export Backend, CPUBackend, CUDABackend, backend, arraytype, adapt_to, adapt_to_like
 
 # --- grid, workspace, problem --------------------------------------------
-export PeriodicGrid, NSWorkspace, workspace, NSProblem, rhs_spectral
+export PeriodicGrid, NSWorkspace, workspace, NSProblem, rhs_spectral, rhs_spectral!
+export RHSCache, StepCache
 
 # --- extension points ----------------------------------------------------
-export AbstractForcing, NoForcing, forcing_rhs, begin_step!
-export AbstractSGSModel, NoSGS, Smagorinsky, sgs_stress_divergence
+export AbstractForcing, NoForcing, forcing_rhs, begin_step!, forcing_space, physical_forcing!
+export AbstractSGSModel, NoSGS, Smagorinsky, sgs_stress_divergence, add_sgs!
 export AbstractIntegrator, RK4, RK2, imag_reach, real_reach
 
 # --- time stepping -------------------------------------------------------
-export advance, advance_physical, simulate
+export advance, advance!, advance_physical, advance_physical!, simulate
 
 # --- stability -----------------------------------------------------------
 export courant_number, cfl_number, viscous_number, spectral_tail, cfl_dt
@@ -84,6 +101,7 @@ include("backend.jl")
 include("grid.jl")
 include("transform.jl")
 include("workspace.jl")
+include("cache.jl")
 include("forcing.jl")
 include("sgs.jl")
 include("integrators.jl")

@@ -25,8 +25,41 @@ called once at the start of each step, before any stage. This is where a
 stochastic forcing draws its noise, so the same realization is held
 across every stage of the step (re-drawing per stage is wrong, and white
 noise needs its `√dt` scaling applied here). The default does nothing.
+
+## Forcing in physical space
+
+A forcing that is formed pointwise from the velocity, `f(u, t)`, can
+instead declare
+
+    forcing_space(f) = :physical
+    physical_forcing!(C, f, u, t, ws)   # C .+= f(u, t), in physical space
+
+and is then added to the physical-space convective product `u × ω`
+before its forward transform, sharing that transform, the 2/3 mask and
+the projection. Since the mask and `P(k)` are linear this is the same
+`P(k)·(mask·F̂)` as above, at the cost of one broadcast instead of the
+transforms a spectral `forcing_rhs` of `f(u)` would pay. `forcing_rhs`
+need not be defined then.
 """
 abstract type AbstractForcing end
+
+"""
+    forcing_space(f) -> :spectral | :physical
+
+Where forcing `f` is evaluated: `:spectral` (the default) through
+[`forcing_rhs`](@ref), or `:physical` through [`physical_forcing!`](@ref).
+See [`AbstractForcing`](@ref).
+"""
+forcing_space(::AbstractForcing) = :spectral
+
+"""
+    physical_forcing!(C, f, u, t, ws)
+
+Add the force of a `:physical` forcing `f` (see [`forcing_space`](@ref))
+on the physical-space velocity `u` at time `t` to `C` in place, both of
+size `(N, N, N, 3)`. Returns `C`.
+"""
+function physical_forcing! end
 
 """
     NoForcing()
