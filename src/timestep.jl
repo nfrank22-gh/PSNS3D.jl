@@ -60,6 +60,27 @@ function advance!(ûP, ::RK2, prob::NSProblem, û, t, dt, ws::NSWorkspace, sc::S
     return ûP
 end
 
+function advance!(ûP, ::RK3, prob::NSProblem, û, t, dt, ws::NSWorkspace, sc::StepCache)
+    T = real(eltype(û))
+    h = T(dt)
+    s, q, k = sc.û0, sc.acc, sc.k            # the state, the register, a slope
+    s .= û .* ws.mask
+    begin_step!(prob.forcing, s, t, dt, ws)
+
+    for i in 1:3
+        rhs_spectral!(k, prob, s, t + _RK3_C[i] * dt, ws, sc.rhs)
+        if i == 1
+            q .= h .* k
+        else
+            q .= T(_RK3_A[i]) .* q .+ h .* k
+        end
+        s .+= T(_RK3_B[i]) .* q
+    end
+
+    ûP .= s .* ws.mask
+    return ûP
+end
+
 """
     advance_physical(prob, u, t, dt, ws)
     advance_physical!(u, ûP, prob, t, dt, ws, sc)

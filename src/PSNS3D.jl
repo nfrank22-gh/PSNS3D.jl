@@ -26,7 +26,7 @@ terms dealiased by the 2/3 rule.
   - `forcing.jl`    --- the [`AbstractForcing`](@ref) extension point.
   - `sgs.jl`        --- the [`AbstractSGSModel`](@ref) extension point, `Smagorinsky`.
   - `problem.jl`    --- [`NSProblem`](@ref) and the right-hand side.
-  - `integrators.jl`--- the [`AbstractIntegrator`](@ref) extension point, `RK4`, `RK2`.
+  - `integrators.jl`--- the [`AbstractIntegrator`](@ref) extension point, `RK4`, `RK3`, `RK2`.
   - `timestep.jl`   --- [`advance`](@ref), one step of the integrator.
   - `simulate.jl`   --- [`simulate`](@ref), a plain time loop.
   - `stability.jl`  --- CFL and viscous margins, `cfl_dt`.
@@ -82,7 +82,7 @@ export RHSCache, StepCache
 # --- extension points ----------------------------------------------------
 export AbstractForcing, NoForcing, forcing_rhs, begin_step!, forcing_space, physical_forcing!
 export AbstractSGSModel, NoSGS, Smagorinsky, sgs_stress_divergence, add_sgs!
-export AbstractIntegrator, RK4, RK2, imag_reach, real_reach
+export AbstractIntegrator, RK4, RK3, RK2, imag_reach, real_reach
 
 # --- time stepping -------------------------------------------------------
 export advance, advance!, advance_physical, advance_physical!, simulate

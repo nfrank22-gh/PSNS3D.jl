@@ -120,6 +120,64 @@ end
     end
 end
 
+@testset "RK3 physics step (Williamson low-storage)" begin
+    N, H = 24, 4.0
+    g = PeriodicGrid(H, N)
+    prob = NSProblem(g; ν=1e-2, integrator=RK3())
+    ws = workspace(prob)
+    u0 = turbulent_puff_ic(g; sigma=H / 8, k_p=2π * 3 / H, seed=0, E0=1.0)
+
+    @testset "stability reaches of the RK3 polynomial" begin
+        R(z) = 1 + z + z^2 / 2 + z^3 / 6
+        @test abs(R(im * imag_reach(RK3()))) ≈ 1 atol = 1e-12
+        @test abs(R(0.99im * imag_reach(RK3()))) < 1 < abs(R(1.01im * imag_reach(RK3())))
+        @test R(-real_reach(RK3())) ≈ -1 atol = 1e-12
+        @test abs(R(-0.99real_reach(RK3()))) < 1 < abs(R(-1.01real_reach(RK3())))
+    end
+
+    @testset "the linear part is the RK3 polynomial of -νk²Δt" begin
+        ε = 1e-6
+        dt = 0.5
+        _, ûP = advance_physical(prob, ε .* u0, 0.0, dt, ws)
+        û0 = forward_transform(ε .* u0, ws.plan) .* ws.mask
+        z = -prob.ν .* ws.ksq .* dt
+        expected = û0 .* @. (1 + z + z^2 / 2 + z^3 / 6)
+        @test norm(ûP .- expected) / norm(expected) < 1e-5
+    end
+
+    @testset "third-order in Δt" begin
+        march(u, h, n) = (for _ in 1:n; u, _ = advance_physical(prob, u, 0.0, h, ws); end; u)
+        T = 0.04
+        ref = march(u0, T / 1024, 1024)
+        errs = [norm(march(u0, T / n, n) .- ref) for n in (4, 8, 16, 32)]
+        orders = [log2(errs[i] / errs[i+1]) for i in 1:length(errs)-1]
+        @test all(o -> 2.7 < o < 3.3, orders)
+    end
+
+    @testset "the stage times: a forcing linear in t is integrated exactly" begin
+        # f = (0, 0, t sin x) from rest gives u_3 = (t²/2) sin x + const; any
+        # third-order method with consistent stage times gets it exactly.
+        struct RampForcing <: AbstractForcing end
+        function PSNS3D.forcing_rhs(::RampForcing, û, t, ws)
+            f = zeros(N, N, N, 3)
+            f[:, :, :, 3] .= t .* sin.(reshape(Array(ws.grid.xs), :, 1, 1))
+            return forward_transform(f, ws.plan)
+        end
+        g2 = PeriodicGrid(2π, N)                 # sin x periodic on the box
+        pr = NSProblem(g2; ν=0.0, forcing=RampForcing(), integrator=RK3())
+        uP, _ = advance_physical(pr, zeros(N, N, N, 3), 0.3, 0.2, workspace(pr))
+        @test uP[:, 1, 1, 3] ≈ ((0.5^2 - 0.3^2) / 2) .* sin.(g2.xs) atol = 1e-12
+    end
+
+    @testset "advance leaves its input alone and stays in the 2/3 band" begin
+        û = forward_transform(u0, ws.plan)
+        û_copy = copy(û)
+        ûP = advance(prob, û, 0.0, 1e-3, ws)
+        @test û == û_copy
+        @test all(iszero, ûP .* (1 .- ws.mask))
+    end
+end
+
 @testset "stability metrics" begin
     g = PeriodicGrid(4.0, 16)
     prob = NSProblem(g; ν=1e-2)
@@ -320,7 +378,7 @@ end
     end
 
     @testset "advance! is advance, bit for bit, also in place" begin
-        for integ in (RK2(), RK4()), sgs in (NoSGS(), Smagorinsky(g; Cs=0.17))
+        for integ in (RK2(), RK3(), RK4()), sgs in (NoSGS(), Smagorinsky(g; Cs=0.17))
             prob = NSProblem(g; ν=1e-2, sgs=sgs, integrator=integ)
             sc = StepCache(prob, ws)
             ref = advance(prob, û, 0.0, 1e-2, ws)
@@ -418,7 +476,7 @@ end
             # The in-place step on this device: bit-identical to the
             # allocating one, and the scratch transform (which on the GPU
             # skips CUFFT.jl's input copy) agrees with the preserving one.
-            sp = NSProblem(g; ν=T(1e-2), sgs=Smagorinsky(g; Cs=0.17), integrator=RK2())
+            sp = NSProblem(g; ν=T(1e-2), sgs=Smagorinsky(g; Cs=0.17), integrator=RK3())
             û0 = forward_transform(u0, ws.plan)
             @test Array(advance!(similar(û0), sp, û0, 0.0, 1e-3, ws, StepCache(ws))) ==
                   Array(advance(sp, û0, 0.0, 1e-3, ws))

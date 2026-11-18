@@ -77,3 +77,41 @@ negative real axis it reaches `2`.
 """
 imag_reach(::RK2) = 0.0
 real_reach(::RK2) = 2.0
+
+"""
+    RK3()
+
+Williamson's low-storage third-order Runge--Kutta method (Williamson
+1980, "Low-storage Runge-Kutta schemes", J. Comput. Phys. 35, 48), the
+three-stage scheme common in pseudo-spectral turbulence codes, with the
+viscous term `-νk²û` marched explicitly alongside the convection. With
+`R = rhs_spectral` and `q₀ = 0`, for `i = 1, 2, 3`
+
+    q_i = A_i q_{i-1} + Δt R(û_{i-1}, t + c_i Δt)
+    û_i = û_{i-1} + B_i q_i
+
+with `A = (0, -5/9, -153/128)`, `B = (1/3, 15/16, 8/15)` and
+`c = (0, 1/3, 3/4)`; `û' = û₃`. Only the state and the one register `q`
+are carried between stages ("2N storage").
+
+Three evaluations of `R` per step, against two for [`RK2`](@ref). Every
+three-stage third-order method has the stability polynomial
+`1 + z + z²/2 + z³/6`, which, unlike RK2's, reaches along the imaginary
+axis: advective modes are stable for `|z| ≤ √3`.
+"""
+struct RK3 <: AbstractIntegrator end
+
+"""
+    imag_reach(::RK3), real_reach(::RK3)
+
+Where the stability polynomial `1 + z + z²/2 + z³/6` of every
+three-stage third-order Runge--Kutta method leaves the unit disk along the
+imaginary and the negative real axis: `√3` and `≈ 2.513`.
+"""
+imag_reach(::RK3) = sqrt(3)
+real_reach(::RK3) = 2.512745326618329
+
+# Williamson's (1980) low-storage coefficients, Eq. (RK3).
+const _RK3_A = (0.0, -5 / 9, -153 / 128)
+const _RK3_B = (1 / 3, 15 / 16, 8 / 15)
+const _RK3_C = (0.0, 1 / 3, 3 / 4)
