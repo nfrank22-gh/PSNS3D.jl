@@ -312,6 +312,31 @@ end
         @test u0 ≈ u        # same box, same centre, only the labels moved
     end
 
+    @testset "window_n: 2 is the Gaussian, larger n a super-Gaussian" begin
+        @test turbulent_puff_ic(g; sigma=H / 16, k_p=2π * 4 / H, seed=1, E0=E0, window_n=2) == u
+        @test_throws ArgumentError turbulent_puff_ic(g; sigma=H / 16, k_p=2π * 4 / H, window_n=0)
+        # The sharper edge must be resolved: at n = 4, σ ≳ 10Δx (here H/6, ~11
+        # cells; at H/16 the residual is ~4e-5). The Gaussian fails the other
+        # way at this width, its window still e^-4.5 on the faces.
+        u4 = turbulent_puff_ic(g; sigma=H / 6, k_p=2π * 4 / H, seed=1, E0=E0, window_n=4)
+        @test divergence_residual(u4, g) < 1e-10
+        @test energy(u4, g) ≈ E0 rtol = 1e-6
+        # A wide puff, so the envelope dominates E₂ over the eddies' share
+        k_p, s = 2π * 8 / H, H / 6
+        xs = g.xs
+        r2 = [x^2 + y^2 + z^2 for x in xs, y in xs, z in xs]
+        E2(v) = (ρ = dropdims(sum(abs2, v; dims=4); dims=4); sum(r2 .* ρ) / sum(ρ))
+        u2 = turbulent_puff_ic(g; sigma=s, k_p=k_p, seed=1, window_n=2)
+        u4 = turbulent_puff_ic(g; sigma=s, k_p=k_p, seed=1, window_n=4)
+        # E₂ ≈ σ² Γ(5/n)/Γ(3/n): 3/2 at n = 2, 0.7397 at n = 4
+        @test E2(u2) / s^2 ≈ 1.5 rtol = 0.1
+        @test E2(u4) / s^2 ≈ 0.7397 rtol = 0.1
+        # the flatter core and sharper edge: less energy beyond 1.8 √E₂
+        tailfrac(v) = (ρ = dropdims(sum(abs2, v; dims=4); dims=4);
+                       sum(ρ .* (r2 .> 1.8^2 * E2(v))) / sum(ρ))
+        @test tailfrac(u4) < tailfrac(u2) / 5
+    end
+
     @testset "sigma = nothing fills the box" begin
         uf = turbulent_puff_ic(PeriodicGrid(H, 32); k_p=2π * 2 / H, seed=1)
         ρ = dropdims(sum(abs2, uf; dims=4); dims=4)

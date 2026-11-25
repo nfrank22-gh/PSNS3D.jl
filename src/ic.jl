@@ -1,12 +1,13 @@
 """
-    turbulent_puff_ic(g; k_p, sigma=nothing, center=nothing, seed=0, E0=1.0)
+    turbulent_puff_ic(g; k_p, sigma=nothing, window_n=2, center=nothing, seed=0, E0=1.0)
 
 A broadband, exactly solenoidal random velocity field with a
 Batchelor-type spectrum peaking near `k_p`, in `g`'s element type and on
 `g`'s device. With `sigma` set, the field is additionally *localized* in
-a Gaussian puff of width `sigma` about `center` (default: the centre of
-the box); with `sigma = nothing` it fills the box, an isotropic random
-initial condition.
+a puff of width `sigma` about `center` (default: the centre of the box),
+Gaussian by default and super-Gaussian for `window_n > 2`; with
+`sigma = nothing` it fills the box, an isotropic random initial
+condition.
 
 The construction is host work --- it runs once, and the seeded
 `MersenneTwister` keeps a run reproducible independently of the backend
@@ -38,15 +39,35 @@ simultaneously, with no iteration.
    shell-integrated spectrum carries a further `4πk²`, the velocity
    acquires `E(k) ∝ k⁴ exp(-2k²/k_p²)` --- the Batchelor form, with
    `k⁴` at large scales and a peak near `k_p`.
-3. If `sigma` is set, window `A ← A exp(-r²/2σ²)`, `r` the (non-periodic)
-   distance from `center`. This convolves the spectrum with a kernel of
-   width `~1/σ`, which leaves it intact provided `k_p ≫ 1/σ`.
+3. If `sigma` is set, window `A ← A exp(-½(r/σ)ⁿ)`, `n = window_n`, `r`
+   the (non-periodic) distance from `center`; `n = 2` is the Gaussian
+   `exp(-r²/2σ²)`. This convolves the spectrum with a kernel of width
+   `~n/σ`, which leaves it intact provided `k_p ≫ n/σ`. See *Window
+   shape* below.
 4. Curl, `û_i = i ε_ijk k_j Â_k`, with the Nyquist bins of the derivative
    zeroed.
 5. Rescale so `∫ u_i u_i dx = E0` (twice the kinetic energy).
 
 The net momentum `∫u dx` vanishes automatically: it is the `k = 0` mode of
 a curl.
+
+## Window shape
+
+The energy density follows the square of the window, `exp(-(r/σ)ⁿ)`, so
+its second moment is
+
+    E₂ = ∫r² u_i u_i dx / ∫u_i u_i dx ≈ σ² Γ(5/n) / Γ(3/n)
+
+(`3σ²/2` for the Gaussian), plus a share of the eddies that does not
+depend on `σ`. A larger `n` gives the puff a flatter core and a sharper
+edge, so more of `E₂` fits inside a given radius: with at most `10⁻³`
+of the energy beyond `r = R`, the RMS radius `√E₂` reaches `0.43 R` for
+`n = 2`, `0.55 R` for `n = 4` and `0.60 R` for `n = 6` (`0.77 R` is the
+top-hat limit). The edge, the radii over which the envelope falls from
+90% to 10% of its peak, is `1.2σ` wide at `n = 2` and `0.66σ` at
+`n = 4`; it must stay wide against the eddy scale `2π/k_p`, and be
+resolved: the field is solenoidal to roundoff at `n = 4` once
+`σ ≳ 10Δx` (`~10⁻⁵` at `σ = 4Δx`).
 
 ## Resolution
 
@@ -58,13 +79,18 @@ is then `σ/ℓ ≲ N/64`: about 2 at `N = 128`, 4 at `N = 256`, 8 at
 
 The divergence of the result is at roundoff only once the spectrum has
 decayed by the per-axis Nyquist bin, where the derivative wavenumber is
-zeroed and `k·(∇×A) = 0` stops being an exact identity.
+zeroed and `k·(∇×A) = 0` stops being an exact identity. The window is
+part of that spectrum twice over: its edge must be resolved (above), and
+it must have decayed on the box faces, or the periodic copy of `A` has a
+jump there --- the Gaussian is still `e^-4.5` on the faces at `σ = H/6`,
+a residual of `~10⁻⁵`, where `n = 4` is at `e^-40`.
 
 `sigma` is in physical units (same as `H`); `k_p` is a physical
 wavenumber, so the eddy scale is `2π/k_p`.
 """
-function turbulent_puff_ic(g::PeriodicGrid{T}; k_p::Real, sigma=nothing, center=nothing,
-                           seed::Integer=0, E0::Real=1.0) where {T}
+function turbulent_puff_ic(g::PeriodicGrid{T}; k_p::Real, sigma=nothing, window_n::Real=2,
+                           center=nothing, seed::Integer=0, E0::Real=1.0) where {T}
+    window_n > 0 || throw(ArgumentError("window_n must be positive, got $window_n"))
     N, H = g.N, g.H
     rng = MersenneTwister(seed)
 
@@ -89,7 +115,10 @@ function turbulent_puff_ic(g::PeriodicGrid{T}; k_p::Real, sigma=nothing, center=
             center isa Real ? ntuple(_ -> center, 3) : Tuple(center)
         r2 = [T((xs[i] - c[1])^2 + (xs[j] - c[2])^2 + (xs[k] - c[3])^2)
               for i in 1:N, j in 1:N, k in 1:N]
-        A .*= reshape(exp.(-r2 ./ T(2 * sigma^2)), N, N, N, 1)
+        # n = 2 keeps the Gaussian's own expression, so it stays bit-identical
+        w = window_n == 2 ? exp.(-r2 ./ T(2 * sigma^2)) :
+            exp.(-(r2 ./ T(sigma^2)) .^ T(window_n / 2) ./ 2)
+        A .*= reshape(w, N, N, N, 1)
     end
 
     # 4. curl -> exactly solenoidal (and exactly localized, if windowed)
